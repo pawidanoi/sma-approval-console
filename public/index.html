@@ -85,6 +85,7 @@
           <button class="btn btn-primary" onclick="showView('booker-form'); resetForm();">+ สร้างคำขอจอง</button>
         </div>
         <div class="snap-grid" id="bookerStats"></div>
+        <div id="bookerArchiveToggle" style="margin-bottom:10px;"></div>
         <div id="bookerReqList"></div>
       </div>
     </div>
@@ -195,6 +196,7 @@
           <div class="snap-grid" style="grid-template-columns:1fr; margin-bottom:12px;">
             <div class="snap"><div class="ic"><svg width="24" height="24" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--warning)" stroke="var(--ink)" stroke-width="7"/><circle cx="50" cy="48" r="23" fill="none" stroke="#fff" stroke-width="8"/><line x1="50" y1="48" x2="50" y2="32" stroke="#fff" stroke-width="7" stroke-linecap="round"/><line x1="50" y1="48" x2="62" y2="56" stroke="#fff" stroke-width="7" stroke-linecap="round"/></svg></div><div class="tx"><b class="num" id="approverPendingCount">0</b><span>รออนุมัติ</span></div></div>
           </div>
+          <div id="approverArchiveToggle" style="margin-bottom:10px;"></div>
           <div class="req-grid" style="grid-template-columns:1fr;" id="approverList"></div>
         </div>
         <div class="view" data-view="approver-detail-panel">

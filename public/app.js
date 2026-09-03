@@ -168,9 +168,17 @@ const STATUS_LABEL = {
   pending: ['รออนุมัติ', 'pill-warning'], approved: ['อนุมัติแล้ว รอจอง', 'pill-accent'],
   done: ['จองสำเร็จ', 'pill-success'], rejected: ['ตีกลับ', 'pill-danger'],
 };
+let bookerAllReqs = [];
+let bookerShowArchive = false;
 async function loadBookerHome() {
   const data = await api('/api/requests?actor=' + encodeURIComponent(session.employee.code));
-  const reqs = data.requests;
+  bookerAllReqs = data.requests;
+  bookerShowArchive = false;
+  renderBookerList();
+}
+function toggleBookerArchive() { bookerShowArchive = !bookerShowArchive; renderBookerList(); }
+function renderBookerList() {
+  const reqs = bookerAllReqs;
   const counts = { pending: 0, approved: 0, done: 0, rejected: 0 };
   reqs.forEach((r) => counts[r.status]++);
   el('bookerStats').innerHTML = `
@@ -178,9 +186,17 @@ async function loadBookerHome() {
     <div class="snap"><div class="ic">${icon('package', 20)}</div><div class="tx"><b class="num">${counts.approved}</b><span>อนุมัติแล้ว รอจอง</span></div></div>
     <div class="snap"><div class="ic">${icon('check', 20)}</div><div class="tx"><b class="num">${counts.done}</b><span>จองสำเร็จ</span></div></div>
     <div class="snap"><div class="ic">${icon('undo', 20)}</div><div class="tx"><b class="num">${counts.rejected}</b><span>ถูกตีกลับ</span></div></div>`;
-  el('bookerReqList').innerHTML = reqs.length
-    ? '<div class="req-grid">' + reqs.map(bookerCardHtml).join('') + '</div>'
-    : emptyStateHtml('suitcase', 'ยังไม่มีคำขอจอง', 'กด "สร้างคำขอจอง" เพื่อเริ่มรายการแรกของคุณ');
+  const active = reqs.filter((r) => r.status === 'pending' || r.status === 'approved');
+  const archived = reqs.filter((r) => r.status === 'done' || r.status === 'rejected');
+  const shown = bookerShowArchive ? archived : active;
+  el('bookerArchiveToggle').innerHTML = bookerShowArchive
+    ? `<button class="btn btn-ghost btn-sm" onclick="toggleBookerArchive()">‹ กลับไปรายการที่กำลังดำเนินการ</button>`
+    : `<button class="btn btn-ghost btn-sm" onclick="toggleBookerArchive()">${icon('package', 14)} ดูรายการที่จบแล้ว (${archived.length})</button>`;
+  el('bookerReqList').innerHTML = shown.length
+    ? '<div class="req-grid">' + shown.map(bookerCardHtml).join('') + '</div>'
+    : bookerShowArchive
+      ? emptyStateHtml('search', 'ยังไม่มีรายการที่จบแล้ว', 'คำขอที่จองสำเร็จหรือถูกตีกลับจะมาอยู่ที่นี่')
+      : emptyStateHtml('suitcase', 'ไม่มีคำขอที่กำลังดำเนินการ', reqs.length ? 'ดูรายการที่จบแล้วได้ที่ปุ่มด้านบน' : 'กด "สร้างคำขอจอง" เพื่อเริ่มรายการแรกของคุณ');
 }
 function bookerCardHtml(r) {
   const [label, cls] = STATUS_LABEL[r.status];
@@ -547,21 +563,40 @@ async function submitComplete(id) {
 }
 
 // ===== approver =====
+let approverAllReqs = [];
+let approverShowArchive = false;
 async function loadApproverQueue() {
   el('approverSubtitle').textContent = CATEGORY_LABEL[approverCategory];
   const data = await api(`/api/requests?role=approver&category=${approverCategory}`);
-  const reqs = data.requests.sort((a, b) => (a.status === 'pending' ? -1 : 1) - (b.status === 'pending' ? -1 : 1));
-  el('approverPendingCount').textContent = reqs.filter((r) => r.status === 'pending').length;
-  el('approverList').innerHTML = reqs.length ? reqs.map(approverCardHtml).join('') : emptyStateHtml('allDone', 'ไม่มีคำขอค้างอยู่', 'คำขอใหม่จะมาปรากฏที่นี่');
+  approverAllReqs = data.requests;
+  approverShowArchive = false;
+  renderApproverList();
   el('approverDetailRoot').innerHTML = '<p class="empty-hint" style="padding:60px 20px;">เลือกคำขอทางซ้ายเพื่อดูรายละเอียด</p>';
   document.querySelector('[data-view="approver-queue-list"]').classList.add('active');
   document.querySelector('[data-view="approver-detail-panel"]').classList.remove('active');
 }
+function toggleApproverArchive() { approverShowArchive = !approverShowArchive; renderApproverList(); }
+function renderApproverList() {
+  const reqs = approverAllReqs.slice().sort((a, b) => (a.status === 'pending' ? -1 : 1) - (b.status === 'pending' ? -1 : 1));
+  el('approverPendingCount').textContent = reqs.filter((r) => r.status === 'pending').length;
+  const active = reqs.filter((r) => r.status === 'pending' || r.status === 'approved');
+  const archived = reqs.filter((r) => r.status === 'done' || r.status === 'rejected');
+  const shown = approverShowArchive ? archived : active;
+  el('approverArchiveToggle').innerHTML = approverShowArchive
+    ? `<button class="btn btn-ghost btn-sm" onclick="toggleApproverArchive()">‹ กลับไปคิวที่รอดำเนินการ</button>`
+    : `<button class="btn btn-ghost btn-sm" onclick="toggleApproverArchive()">${icon('package', 14)} ดูประวัติที่จบแล้ว (${archived.length})</button>`;
+  el('approverList').innerHTML = shown.length
+    ? shown.map(approverCardHtml).join('')
+    : approverShowArchive
+      ? emptyStateHtml('search', 'ยังไม่มีประวัติ', 'คำขอที่จองสำเร็จหรือถูกตีกลับจะมาอยู่ที่นี่')
+      : emptyStateHtml('allDone', 'ไม่มีคำขอค้างอยู่', 'คำขอใหม่จะมาปรากฏที่นี่');
+}
 function approverCardHtml(r) {
   const [label, cls] = STATUS_LABEL[r.status];
   const dup = r.dupWarnings.length ? `<span class="pill pill-danger" style="margin-left:6px;">ชื่อซ้ำ</span>` : '';
+  const bookerName = r.createdByName || r.created_by;
   return `<div class="trav-card" onclick="openApproverDetail(${r.id})">
-    <div class="trav-top">${avatarHtml(r.team_code || r.branch?.name, 36)}<div class="info"><h3>${r.branch?.name || r.branch_code}</h3><div class="sub">${r.branch?.province || ''} · ${r.team_code || ''}</div></div><span class="pill ${cls}">${label}</span></div>
+    <div class="trav-top">${avatarHtml(bookerName, 36)}<div class="info"><h3>${r.branch?.name || r.branch_code}</h3><div class="sub">จองโดย ${bookerName} · ${r.team_code || ''}</div></div><span class="pill ${cls}">${label}</span></div>
     <div class="trav-meta"><span><b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${r.guests.length} คน · ${r.rooms} ห้อง</span></div>
     <div class="trav-meta" style="border-top:none; padding-top:0;">${icon('hotel', 14)} ${r.hotel?.name || '-'}${r.branchHotelKm != null ? ' · ' + r.branchHotelKm + ' กม.จากสาขา' : ''}${dup}</div>
   </div>`;
