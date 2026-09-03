@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>จองที่พักภาคสนาม</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mitr:wght@500;600;700&family=IBM+Plex+Sans+Thai:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+</head>
+<body>
+<div class="app-shell" id="appShell">
+  <div class="topbar">
+    <div class="brand"><span class="mark"><svg width="16" height="16" viewBox="0 0 24 24" fill="none"><path d="M12 2L4 7v10l8 5 8-5V7l-8-5z" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/><circle cx="12" cy="11" r="2.5" fill="#fff"/></svg></span> จองที่พักภาคสนาม</div>
+    <button class="who" id="whoBox" style="visibility:hidden;" onclick="logout()">
+      <div class="avatar" id="whoAv">-</div>
+      <div class="who-text"><b id="whoName">-</b><span id="whoRole">-</span></div>
+    </button>
+  </div>
+  <div class="tabbar" id="tabbar"></div>
+  <div class="content" id="content">
+
+    <div class="view" data-view="login">
+      <div class="col login-wrap">
+        <div class="login-hero">
+          <h2>ยินดีต้อนรับกลับมา</h2>
+          <p>จองที่พักให้ทีมภาคสนามได้ในไม่กี่คลิก — ค้นสาขา เลือกที่พัก จับคู่พนักงาน ระบบจัดการห้องให้อัตโนมัติ</p>
+          <div class="scene">
+            <svg viewBox="0 0 400 150" preserveAspectRatio="xMidYMax meet" style="display:block; width:100%; height:auto; overflow:visible;">
+              <circle cx="332" cy="30" r="22" fill="var(--warning)" stroke="var(--ink)" stroke-width="4"/>
+              <g stroke="var(--warning)" stroke-width="4" stroke-linecap="round"><line x1="332" y1="0" x2="332" y2="-8"/><line x1="360" y1="8" x2="366" y2="2"/><line x1="360" y1="52" x2="366" y2="58"/></g>
+              <path d="M0 150V118c40-16 80-16 120 0s80 16 120 0 80-16 120 0 40 16 40 16v16z" fill="var(--surface)" stroke="var(--ink)" stroke-width="4"/>
+              <g transform="translate(150,40)">
+                <path d="M-8 30 46 -2 100 30" fill="var(--accent-deep)" stroke="var(--ink)" stroke-width="5" stroke-linejoin="round"/>
+                <rect x="0" y="28" width="92" height="56" rx="6" fill="#fff" stroke="var(--ink)" stroke-width="5"/>
+                <rect x="10" y="38" width="16" height="14" rx="2" fill="var(--info)" stroke="var(--ink)" stroke-width="3.5"/>
+                <rect x="66" y="38" width="16" height="14" rx="2" fill="var(--info)" stroke="var(--ink)" stroke-width="3.5"/>
+                <rect x="36" y="54" width="20" height="30" rx="2" fill="var(--accent)" stroke="var(--ink)" stroke-width="4"/>
+              </g>
+              <path d="M96 112c22-28 40-32 58-16" fill="none" stroke="var(--ink)" stroke-width="3" stroke-dasharray="1 8" stroke-linecap="round"/>
+              <g transform="translate(52,80)">
+                <rect x="0" y="16" width="50" height="36" rx="8" fill="var(--warning)" stroke="var(--ink)" stroke-width="5"/>
+                <rect x="16" y="4" width="18" height="14" rx="5" fill="none" stroke="var(--ink)" stroke-width="5"/>
+                <line x1="4" y1="34" x2="46" y2="34" stroke="var(--ink)" stroke-width="3"/>
+                <rect x="20" y="26" width="10" height="7" rx="2" fill="#fff" stroke="var(--ink)" stroke-width="3"/>
+              </g>
+              <g transform="translate(88,100)">
+                <path d="M9 0c5 0 9 4 9 9 0 7-9 16-9 16s-9-9-9-16c0-5 4-9 9-9z" fill="var(--danger)" stroke="var(--ink)" stroke-width="4" stroke-linejoin="round"/>
+                <circle cx="9" cy="9" r="3.6" fill="#fff" stroke="var(--ink)" stroke-width="2.5"/>
+              </g>
+              <path d="M256 96c8-10 20-10 28 0" fill="none" stroke="var(--ink)" stroke-width="4" stroke-linecap="round" opacity=".5"/>
+              <path d="M270 108c8-10 20-10 28 0" fill="none" stroke="var(--ink)" stroke-width="4" stroke-linecap="round" opacity=".35"/>
+            </svg>
+          </div>
+        </div>
+        <div>
+          <span class="field-label">รหัสพนักงาน</span>
+          <input type="text" id="loginCode" placeholder="เช่น CMT2400392" onkeydown="if(event.key==='Enter')doLogin()">
+        </div>
+        <button class="btn btn-primary btn-block" onclick="doLogin()">เข้าสู่ระบบ</button>
+        <div id="loginError"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="role-pick">
+      <div class="col login-wrap">
+        <button class="back-link" onclick="logout()">‹ ออกจากระบบ / เปลี่ยนรหัสพนักงาน</button>
+        <div class="role-blob">
+          <svg width="120" height="120" viewBox="0 0 120 120"><path d="M60 6c22 0 42 10 50 30s2 46-14 58-46 12-64-2S6 54 14 34 38 6 60 6z" fill="var(--accent-soft)" stroke="var(--ink)" stroke-width="4"/></svg>
+          <div class="avatar" id="rpAv" style="width:56px; height:56px; font-size:22px; border-width:3px;">-</div>
+        </div>
+        <div style="text-align:center;"><h2 style="font-size:19px;" id="rpGreeting">สวัสดี</h2>
+          <p style="color:var(--ink-soft); font-size:13px; margin-top:6px;">เลือกบทบาทที่จะใช้งาน</p>
+        </div>
+        <div class="role-pick" id="rolePickList"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="booker-home">
+      <div class="col-wide">
+        <div class="page-head">
+          <div><h2>แผนที่ฉันจองไปแล้ว</h2><div class="sub">คำขอจองที่พักทั้งหมดที่คุณสร้างไว้</div></div>
+          <button class="btn btn-primary" onclick="showView('booker-form'); resetForm();">+ สร้างคำขอจอง</button>
+        </div>
+        <div class="snap-grid" id="bookerStats"></div>
+        <div id="bookerReqList"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="booker-form">
+      <div class="col">
+        <button class="back-link" onclick="showView('booker-home')">‹ กลับไปแผนของฉัน</button>
+        <div class="page-head"><div><h2>สร้างคำขอจองที่พัก</h2></div></div>
+        <div id="formError"></div>
+
+        <div class="card step">
+          <div class="step-head"><span class="step-num">1</span>ประเภททีม</div>
+          <div class="segmented" id="teamCatSeg"></div>
+        </div>
+
+        <div class="card step">
+          <div class="step-head"><span class="step-num">2</span>ประเภทงาน</div>
+          <div class="mission-grid" id="missionGrid"></div>
+        </div>
+
+        <div class="card step">
+          <div class="step-head"><span class="step-num">3</span>ทีมที่เดินทาง</div>
+          <span class="field-label">เลือกทีม</span>
+          <div class="combo">
+            <div class="combo-input" id="teamComboInput" onclick="toggleTeamCombo()"><span class="ic"><svg width="20" height="20" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--accent)" stroke="var(--ink)" stroke-width="7"/><circle cx="37" cy="36" r="10" fill="#fff"/><path d="M18 68c0-13 9-21 19-21s19 8 19 21" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="67" cy="41" r="7.5" fill="#fff" opacity=".8"/><path d="M60 68c1-10 7-16 14-17" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".8"/></svg></span><div class="combo-chosen" id="teamChosen"><span style="color:var(--ink-faint); font-weight:500;">เลือกทีม...</span></div></div>
+            <div class="combo-list" id="teamAcList" style="display:none;"></div>
+          </div>
+          <div id="musterPointBox"></div>
+        </div>
+
+        <div class="card step" id="branchStepCard" style="display:none;">
+          <div class="step-head"><span class="step-num">4</span>สาขาที่ไปทำงาน</div>
+          <span class="field-label">สาขา</span>
+          <div class="combo">
+            <div class="combo-input"><span class="ic"><svg width="18" height="18" viewBox="0 0 100 100" class="ic-svg" style="overflow:visible;"><path d="M50 8c17 0 30 13 30 30 0 22-30 54-30 54S20 60 20 38C20 21 33 8 50 8z" fill="var(--danger)" stroke="var(--ink)" stroke-width="7" stroke-linejoin="round"/><circle cx="50" cy="39" r="13" fill="#fff" stroke="var(--ink)" stroke-width="5"/></svg></span><input type="text" id="fBranchSearch" autocomplete="off" placeholder="เลือกหรือพิมพ์ค้นหาชื่อสาขา/จังหวัด" oninput="searchBranches(this.value)" onfocus="searchBranches(this.value)"></div>
+            <div class="combo-list" id="branchAcList" style="display:none;"></div>
+          </div>
+          <div id="fBranchChosen"></div>
+          <div id="musterCheckBox"></div>
+        </div>
+
+        <div class="card step" id="hotelStepCard" style="display:none;">
+          <div class="step-head"><span class="step-num">5</span>เลือกที่พัก</div>
+          <div id="nearHotelsList"></div>
+          <button class="btn btn-ghost btn-sm" id="showFarBtn" style="align-self:flex-start; color:var(--ink-soft); display:inline-flex; align-items:center; gap:6px;" onclick="toggleFarHotels()"><svg width="17" height="17" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--info)" stroke="var(--ink)" stroke-width="7"/><circle cx="41" cy="41" r="16" fill="none" stroke="#fff" stroke-width="8"/><line x1="53" y1="53" x2="72" y2="72" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg> ดูที่พักไกลกว่านี้</button>
+          <div id="farHotelsList" style="display:none;"></div>
+          <div id="farReasonBox" style="display:none;"><span class="field-label">เหตุผลที่เลือกที่พักไกลกว่ารัศมี *</span><textarea id="fFarReason" rows="2" placeholder="เช่น ที่พักในรัศมีเต็มหมดช่วงวันหยุดยาว"></textarea></div>
+          <div id="distanceMapBox"></div>
+        </div>
+
+        <div class="card step" id="dateStepCard" style="display:none;">
+          <div class="step-head"><span class="step-num">6</span>วันเข้าพัก</div>
+          <div class="field-row">
+            <div><span class="field-label">วันเข้าพัก</span><input type="date" id="fCheckin"></div>
+            <div><span class="field-label">วันเช็คเอาท์</span><input type="date" id="fCheckout"></div>
+          </div>
+        </div>
+
+        <div class="card step" id="guestStepCard" style="display:none;">
+          <div class="step-head"><span class="step-num">7</span>ผู้เข้าพัก</div>
+          <span class="field-label">เลือกจากทีม <span id="guestTeamLabel"></span> (แตะชื่อเพื่อเพิ่ม)</span>
+          <div class="combo">
+            <div class="combo-input" onclick="openTeamRosterList()"><span class="ic"><svg width="20" height="20" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--accent)" stroke="var(--ink)" stroke-width="7"/><circle cx="37" cy="36" r="10" fill="#fff"/><path d="M18 68c0-13 9-21 19-21s19 8 19 21" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/><circle cx="67" cy="41" r="7.5" fill="#fff" opacity=".8"/><path d="M60 68c1-10 7-16 14-17" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" opacity=".8"/></svg></span><div class="combo-chosen"><span style="color:var(--ink-faint); font-weight:500;">แตะเพื่อดูรายชื่อในทีม</span></div></div>
+            <div class="combo-list" id="teamRosterList" style="display:none;"></div>
+          </div>
+
+          <div class="guest-chip-row" id="guestChipRow"></div>
+          <div class="note-box muted" id="guestSummary" style="display:none;"></div>
+
+          <button class="btn btn-ghost btn-sm" style="align-self:flex-start; margin-top:6px;" onclick="toggleOtherTeamSearch()">+ เพิ่มผู้เข้าพักจากทีมอื่น</button>
+          <div id="otherTeamBox" style="display:none;">
+            <span class="field-label" style="margin-top:6px;">ค้นหาชื่อหรือทีมอื่น</span>
+            <div class="combo">
+              <div class="combo-input"><span class="ic"><svg width="18" height="18" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--info)" stroke="var(--ink)" stroke-width="7"/><circle cx="41" cy="41" r="16" fill="none" stroke="#fff" stroke-width="8"/><line x1="53" y1="53" x2="72" y2="72" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg></span><input type="text" id="guestSearch" autocomplete="off" placeholder="พิมพ์ชื่อ หรือชื่อทีม เช่น SMA9" oninput="searchGuests(this.value)" onfocus="searchGuests(this.value)"></div>
+              <div class="combo-list" id="guestAcList" style="display:none;"></div>
+            </div>
+          </div>
+
+          <button class="btn btn-ghost btn-sm" style="align-self:flex-start;" onclick="showAddGuestForm()">+ เพิ่มรายชื่อใหม่เข้าระบบ</button>
+          <div id="addGuestForm" class="add-guest-form" style="display:none;">
+            <input type="text" id="newGuestName" placeholder="ชื่อ-นามสกุล">
+            <div class="field-row">
+              <input type="text" id="newGuestPhone" placeholder="เบอร์โทร (ถ้ามี)">
+              <select id="newGuestGender"><option value="M">ชาย</option><option value="F">หญิง</option></select>
+            </div>
+            <button class="btn btn-sm" onclick="addNewGuest()">เพิ่มรายชื่อนี้</button>
+          </div>
+        </div>
+
+        <div class="sticky-foot" style="flex-direction:column;">
+          <button class="btn btn-primary btn-block" onclick="submitRequest()" id="submitBtn">ส่งขออนุมัติ →</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="booking-detail">
+      <div class="col" id="detailRoot"></div>
+    </div>
+
+    <div class="view" data-view="booking-complete">
+      <div class="col" id="completeRoot"></div>
+    </div>
+
+    <div class="view" data-view="approver-queue">
+      <div class="split">
+        <div class="view active" data-view="approver-queue-list">
+          <div class="page-head"><div><h2>คิวรออนุมัติ</h2><div class="sub" id="approverSubtitle"></div></div></div>
+          <div class="snap-grid" style="grid-template-columns:1fr; margin-bottom:12px;">
+            <div class="snap"><div class="ic"><svg width="24" height="24" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--warning)" stroke="var(--ink)" stroke-width="7"/><circle cx="50" cy="48" r="23" fill="none" stroke="#fff" stroke-width="8"/><line x1="50" y1="48" x2="50" y2="32" stroke="#fff" stroke-width="7" stroke-linecap="round"/><line x1="50" y1="48" x2="62" y2="56" stroke="#fff" stroke-width="7" stroke-linecap="round"/></svg></div><div class="tx"><b class="num" id="approverPendingCount">0</b><span>รออนุมัติ</span></div></div>
+          </div>
+          <div class="req-grid" style="grid-template-columns:1fr;" id="approverList"></div>
+        </div>
+        <div class="view" data-view="approver-detail-panel">
+          <div id="approverDetailRoot"><p class="empty-hint" style="padding:60px 20px;">เลือกคำขอทางซ้ายเพื่อดูรายละเอียด</p></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="analysis">
+      <div class="col-wide" style="max-width:900px;">
+        <div class="page-head"><div><h2>วิเคราะห์ที่พักรวม</h2><div class="sub">แผนที่วันซ้อนกันและอยู่ใกล้กัน หรือเลือกที่พักเดียวกันอยู่แล้ว — รวมข้อมูลทั้งสายกิจกรรมและ setup</div></div></div>
+        <div id="analysisList"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="dashboard">
+      <div class="col-wide" style="max-width:1100px;">
+        <div class="page-head"><div><h2>แดชบอร์ดสรุปการจอง</h2><div class="sub" id="dashSubtitle"></div></div></div>
+        <div class="snap-grid snap-grid-4" id="dashStats"></div>
+        <div class="section-title" style="margin:16px 0 10px; display:block;">รายการทั้งหมด · เวลาส่งคำขอ / เวลาอนุมัติ</div>
+        <div style="overflow-x:auto;">
+          <table id="dashTable" style="width:100%; border-collapse:collapse; font-size:12.5px; background:var(--surface); border-radius:var(--r-lg); overflow:hidden;">
+            <thead><tr style="background:var(--surface-2); text-align:left;">
+              <th style="padding:10px 12px;">สาขา</th><th style="padding:10px 12px;">ผู้จอง</th>
+              <th style="padding:10px 12px;">ส่งคำขอ</th><th style="padding:10px 12px;">อนุมัติ</th>
+              <th style="padding:10px 12px;">เวลาที่ใช้อนุมัติ</th><th style="padding:10px 12px;">จองล่วงหน้า</th><th style="padding:10px 12px;">สถานะ</th>
+            </tr></thead>
+            <tbody id="dashTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="admin-data">
+      <div class="col-wide" style="max-width:1000px;">
+        <div class="page-head"><div><h2>จัดการข้อมูล</h2><div class="sub">แก้ไขรายชื่อพนักงาน และอัพเดตข้อมูลสาขา/ที่พักด้วยไฟล์ Excel — เฉพาะผู้อนุมัติ</div></div></div>
+
+        <div class="card step">
+          <div class="step-head" style="justify-content:space-between; display:flex; align-items:center;">
+            <span>พนักงาน</span>
+            <button class="btn btn-primary btn-sm" onclick="openStaffForm(null)">+ เพิ่มพนักงาน</button>
+          </div>
+          <div style="display:flex; gap:8px;">
+            <div class="combo" style="flex:1;">
+              <div class="combo-input"><span class="ic"><svg width="18" height="18" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--info)" stroke="var(--ink)" stroke-width="7"/><circle cx="41" cy="41" r="16" fill="none" stroke="#fff" stroke-width="8"/><line x1="53" y1="53" x2="72" y2="72" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg></span><input type="text" id="adminStaffSearch" autocomplete="off" placeholder="พิมพ์ชื่อ / รหัสพนักงาน / ทีม เพื่อค้นหา" oninput="searchAdminStaff(this.value)" onfocus="searchAdminStaff(this.value)"></div>
+              <div class="combo-list" id="adminStaffAcList" style="display:none;"></div>
+            </div>
+            <select id="adminStaffCatFilter" onchange="searchAdminStaff(el('adminStaffSearch').value)" style="flex:0 0 auto; width:auto;">
+              <option value="">ทุกประเภททีม</option>
+              <option value="activity">ทีมกิจกรรม</option>
+              <option value="setup">ทีม setup</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="staffFormCard" class="card step" style="display:none;">
+          <div class="step-head" id="staffFormTitle">เพิ่มพนักงาน</div>
+          <div class="field-row">
+            <div><span class="field-label">รหัสพนักงาน *</span><input type="text" id="sfCode"></div>
+            <div><span class="field-label">ประเภททีม *</span>
+              <select id="sfCategory"><option value="activity">ทีมกิจกรรม</option><option value="setup">ทีม setup</option></select>
+            </div>
+          </div>
+          <div class="field-row">
+            <div><span class="field-label">ชื่อจริง-นามสกุล *</span><input type="text" id="sfName"></div>
+            <div><span class="field-label">ชื่อเล่น</span><input type="text" id="sfNickname"></div>
+          </div>
+          <div class="field-row">
+            <div><span class="field-label">เพศ *</span><select id="sfGender"><option value="M">ชาย</option><option value="F">หญิง</option></select></div>
+            <div><span class="field-label">ทีม *</span><input type="text" id="sfTeamCode" placeholder="เช่น SMA9 หรือ ราชบุรี 1"></div>
+          </div>
+          <div class="field-row">
+            <div><span class="field-label">ตำแหน่ง</span><input type="text" id="sfRole" placeholder="ผู้จอง / ผู้อนุมัติ / พนักงาน ฯลฯ"></div>
+            <div><span class="field-label">เบอร์โทร</span><input type="text" id="sfPhone"></div>
+          </div>
+          <span class="field-label">จังหวัด (บ้าน)</span><input type="text" id="sfProvince">
+          <div id="staffFormError"></div>
+          <div style="display:flex; gap:8px; margin-top:6px;">
+            <button class="btn btn-primary" onclick="saveStaffForm()">บันทึก</button>
+            <button class="btn btn-ghost" onclick="closeStaffForm()">ยกเลิก</button>
+            <button class="btn btn-ghost" id="staffDeleteBtn" style="margin-left:auto; color:var(--danger);" onclick="deleteStaffForm()">ลบพนักงานนี้</button>
+          </div>
+        </div>
+
+        <div class="card step">
+          <div class="step-head">สาขา</div>
+          <p class="sub" style="margin:0 0 8px;">อัพโหลดไฟล์ Excel รูปแบบเดียวกับ "สาขาอัพเดต.xlsx" — ระบบจะแทนที่ข้อมูลสาขาทั้งชุดด้วยไฟล์นี้</p>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="file" id="adminBranchFile" accept=".xlsx,.xls">
+            <button class="btn btn-primary btn-sm" onclick="uploadAdminFile('branch')">นำเข้าไฟล์นี้</button>
+            <span id="adminBranchMsg" style="font-size:12.5px;"></span>
+          </div>
+          <div id="adminBranchSummary" class="sub" style="margin-top:6px;"></div>
+        </div>
+
+        <div class="card step">
+          <div class="step-head">ที่พัก</div>
+          <p class="sub" style="margin:0 0 8px;">อัพโหลดไฟล์ Excel รูปแบบเดียวกับที่ระบบเคยส่งออกให้ (รหัส/ชื่อที่พัก/จังหวัด/อำเภอ/.../lat/lng/ลิงก์แผนที่/ราคา) — แทนที่ข้อมูลที่พักทั้งชุด</p>
+          <div style="display:flex; gap:8px; align-items:center;">
+            <input type="file" id="adminHotelFile" accept=".xlsx,.xls">
+            <button class="btn btn-primary btn-sm" onclick="uploadAdminFile('hotel')">นำเข้าไฟล์นี้</button>
+            <span id="adminHotelMsg" style="font-size:12.5px;"></span>
+          </div>
+          <div id="adminHotelSummary" class="sub" style="margin-top:6px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="employee-view">
+      <div class="col">
+        <div class="page-head"><div><h2>ค้นหาแผนของพนักงาน</h2><div class="sub">ใส่รหัสพนักงานเพื่อดูแผนของตัวเอง</div></div></div>
+        <div style="display:flex; gap:8px;">
+          <input type="text" id="empLookupCode" placeholder="รหัสพนักงาน">
+          <button class="btn btn-primary" onclick="lookupEmployee()">ค้นหา</button>
+        </div>
+        <div id="empLookupResult"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
