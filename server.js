@@ -132,9 +132,23 @@ app.get('/api/mission-types', (req, res) => {
   res.json({ missionTypes: MISSION_TYPES[category] || [] });
 });
 
+// area (ชื่อเล่นไม่มีคำนำหน้า เช่น "พี่อิ๋ม" -> "อิ๋ม") ใช้จับคู่กับคอลัมน์ area_owner ที่ซิงค์มาจากชีต HR
+function bareNickname(nickname) { return String(nickname || '').replace(/^(พี่|คุณ|นาย|นาง|นางสาว)/, '').trim(); }
+
 app.get('/api/teams', (req, res) => {
   const category = String(req.query.category || '');
-  const rows = ref.getStaff().filter((s) => !category || s.category === category);
+  const actor = String(req.query.actor || '').trim();
+  let rows = ref.getStaff().filter((s) => !category || s.category === category);
+
+  // ผู้จอง (Area) เห็นเฉพาะทีมที่ตัวเองดูแล + ทีมของตัวเอง — กันจองสลับทีมกันเอง
+  const actorRow = actor ? rows.find((s) => s.code === actor) : null;
+  if (actorRow && actorRow.role === 'ผู้จอง') {
+    const actorNick = bareNickname(actorRow.nickname);
+    const ownedTeams = new Set(rows.filter((s) => s.area_owner && bareNickname(s.area_owner) === actorNick).map((s) => s.team_code));
+    if (actorRow.team_code) ownedTeams.add(actorRow.team_code);
+    rows = rows.filter((s) => ownedTeams.has(s.team_code));
+  }
+
   const counts = {};
   for (const r of rows) { if (r.team_code) counts[r.team_code] = (counts[r.team_code] || 0) + 1; }
   const teams = Object.keys(counts).sort().map((code) => ({ code, count: counts[code] }));
@@ -181,7 +195,13 @@ app.get('/api/hotels-near', (req, res) => {
   });
 });
 
-async function getOpenBookingMap() {
+function datesOverlap(aStart, aEnd, bStart, bEnd) {
+  return new Date(aStart) < new Date(bEnd) && new Date(bStart) < new Date(aEnd);
+}
+
+// คืน Map: employee_code -> รายการคำขอที่ยังเปิดอยู่ทั้งหมด (ไม่ใช่แค่รายการเดียว)
+// เพราะคนคนหนึ่งสามารถมีคำขอที่ยังไม่จบได้หลายรายการพร้อมกัน ถ้าวันที่ไม่ชนกัน
+async function getOpenBookingsMap() {
   const { data, error } = await supabase
     .from('approval_request_guests')
     .select('employee_code, approval_requests!inner(status, branch_name, checkin_date, checkout_date)')
@@ -189,15 +209,29 @@ async function getOpenBookingMap() {
   if (error) throw new Error(error.message);
   const map = new Map();
   for (const row of data) {
-    if (!row.employee_code || map.has(row.employee_code)) continue;
+    if (!row.employee_code) continue;
     const r = row.approval_requests;
-    map.set(row.employee_code, { branch: r.branch_name, dates: `${r.checkin_date} – ${r.checkout_date}` });
+    const arr = map.get(row.employee_code) || [];
+    arr.push({ branch: r.branch_name, checkin_date: r.checkin_date, checkout_date: r.checkout_date });
+    map.set(row.employee_code, arr);
   }
   return map;
 }
+// เดิม endpoint /api/staff ใช้ map แบบ "มีคำขอเปิดอยู่ไหม" เฉยๆ (ไม่ดูวันที่) เก็บไว้เพื่อความเข้ากันได้
+// เมื่อไม่ได้ส่งวันที่มาด้วย — ถ้าส่งวันที่มา จะเช็คว่าชนกันจริงไหมก่อนถือว่า "บล็อก"
+async function getOpenBookingConflict(map, code, checkin, checkout) {
+  const list = map.get(code);
+  if (!list || !list.length) return null;
+  if (!checkin || !checkout) {
+    const o = list[0];
+    return { branch: o.branch, dates: `${o.checkin_date} – ${o.checkout_date}` };
+  }
+  const hit = list.find((o) => datesOverlap(checkin, checkout, o.checkin_date, o.checkout_date));
+  return hit ? { branch: hit.branch, dates: `${hit.checkin_date} – ${hit.checkout_date}` } : null;
+}
 
 app.get('/api/staff', async (req, res) => {
-  const { category, team, q } = req.query;
+  const { category, team, q, checkin, checkout } = req.query;
   let rows = ref.getStaff();
   if (category) rows = rows.filter((s) => s.category === category);
   if (team) rows = rows.filter((s) => s.team_code === team);
@@ -206,8 +240,9 @@ app.get('/api/staff', async (req, res) => {
     rows = rows.filter((s) => s.name.toLowerCase().includes(query) || (s.nickname || '').toLowerCase().includes(query) || (s.team_code || '').toLowerCase().includes(query));
   }
   try {
-    const openMap = await getOpenBookingMap();
-    res.json({ staff: rows.slice(0, 40).map((s) => ({ ...s, openBooking: openMap.get(s.code) || null })) });
+    const openMap = await getOpenBookingsMap();
+    const staff = await Promise.all(rows.slice(0, 40).map(async (s) => ({ ...s, openBooking: await getOpenBookingConflict(openMap, s.code, checkin, checkout) })));
+    res.json({ staff });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -245,6 +280,7 @@ async function serializeRequest(r) {
     createdByName: creator ? (creator.nickname || creator.name) : r.created_by,
     branch: { code: r.branch_code, name: r.branch_name, province: r.branch_province, lat: r.branch_lat, lng: r.branch_lng },
     hotel: r.hotel_code ? { code: r.hotel_code, name: r.hotel_name, price_per_night: r.hotel_price_per_night, map_link: r.hotel_map_link, lat: r.hotel_lat, lng: r.hotel_lng } : null,
+    hotelCandidates: r.hotel_candidates || [],
     muster: r.muster_name ? { name: r.muster_name, lat: r.muster_lat, lng: r.muster_lng } : null,
     branchHotelKm, musterBranchKm, totalKm,
     nights,
@@ -267,14 +303,29 @@ app.post('/api/requests', async (req, res) => {
   if (!b.team_code) errors.push('ต้องเลือกทีมที่เดินทาง');
   if (!b.branch_code) errors.push('ต้องเลือกสาขา');
   if (!b.checkin_date || !b.checkout_date) errors.push('ต้องระบุวันเข้าพัก-เช็คเอาท์');
-  if (!b.hotel_code) errors.push('ต้องเลือกที่พัก');
   if (!b.created_by) errors.push('ไม่พบผู้สร้างคำขอ (session หมดอายุ?)');
   if (!Array.isArray(b.guests) || b.guests.length === 0) errors.push('ต้องมีผู้เข้าพักอย่างน้อย 1 คน');
 
+  const hotelCodes = Array.isArray(b.hotel_codes) ? [...new Set(b.hotel_codes.filter(Boolean))] : [];
+  if (hotelCodes.length < 3) errors.push('ต้องเลือกที่พักอย่างน้อย 3 อันดับ (หลัก 1 + สำรอง)');
+  if (hotelCodes.length > 5) errors.push('เลือกที่พักได้สูงสุด 5 อันดับ');
+  const hotelCandidates = hotelCodes.map((code) => findHotel(code)).filter(Boolean);
+  if (hotelCandidates.length !== hotelCodes.length) errors.push('มีที่พักบางอันดับที่ไม่พบในข้อมูลอ้างอิง');
+  const hotel = hotelCandidates[0] || null;
+
   const branch = findBranch(b.branch_code);
-  const hotel = findHotel(b.hotel_code);
   if (!branch) errors.push('ไม่พบสาขานี้ในข้อมูลอ้างอิง');
-  if (b.hotel_code && !hotel) errors.push('ไม่พบที่พักนี้ในข้อมูลอ้างอิง');
+
+  // ผู้จอง (Area) จองได้เฉพาะทีมที่ตัวเองดูแล + ทีมตัวเอง — กันจองสลับทีมกันเอง
+  if (b.created_by && b.team_code) {
+    const creatorRow = ref.getStaff().find((s) => s.code === b.created_by && s.category === b.team_category);
+    if (creatorRow && creatorRow.role === 'ผู้จอง') {
+      const creatorNick = bareNickname(creatorRow.nickname);
+      const ownedTeams = new Set(ref.getStaff().filter((s) => s.category === b.team_category && s.area_owner && bareNickname(s.area_owner) === creatorNick).map((s) => s.team_code));
+      if (creatorRow.team_code) ownedTeams.add(creatorRow.team_code);
+      if (!ownedTeams.has(b.team_code)) errors.push('คุณไม่มีสิทธิ์จองให้ทีมนี้ (ไม่ใช่ทีมที่ดูแลหรือทีมตัวเอง)');
+    }
+  }
 
   let muster = null;
   if (rule && b.team_code && branch) {
@@ -298,21 +349,22 @@ app.post('/api/requests', async (req, res) => {
     }
   }
 
-  // กันจองซ้ำ: ห้ามมีใครในรายชื่อที่มีคำขออื่นซึ่งยังเปิดอยู่
-  if (Array.isArray(b.guests)) {
+  // กันจองซ้ำ: ห้ามมีใครในรายชื่อที่มีคำขออื่นซึ่งยังเปิดอยู่ "และ" วันที่ชนกันจริง
+  // (คนคนเดียวจองสองแผนต่างวันที่ไม่ชนกันได้ เช่น จัดงานคนละวันในเดือนเดียวกัน)
+  if (Array.isArray(b.guests) && b.checkin_date && b.checkout_date) {
     try {
-      const openMap = await getOpenBookingMap();
+      const openMap = await getOpenBookingsMap();
       for (const g of b.guests) {
-        if (g.employee_code && openMap.has(g.employee_code)) {
-          const o = openMap.get(g.employee_code);
-          errors.push(`${g.name} มีแผนจองอยู่แล้ว (${o.branch} ${o.dates}) ไม่สามารถจองซ้ำได้`);
-        }
+        if (!g.employee_code) continue;
+        const conflict = await getOpenBookingConflict(openMap, g.employee_code, b.checkin_date, b.checkout_date);
+        if (conflict) errors.push(`${g.name} มีแผนจองอยู่แล้ว (${conflict.branch} ${conflict.dates}) ซึ่งวันที่ชนกัน ไม่สามารถจองซ้ำได้`);
       }
     } catch (err) { errors.push('ตรวจสอบการจองซ้ำไม่สำเร็จ: ' + err.message); }
   }
 
   if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
 
+  const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link }));
   const { data: inserted, error: insErr } = await supabase.from('approval_requests').insert({
     team_category: b.team_category,
     mission_type: b.mission_type,
@@ -320,6 +372,7 @@ app.post('/api/requests', async (req, res) => {
     branch_code: branch.code, branch_name: branch.name, branch_province: branch.province, branch_lat: branch.lat, branch_lng: branch.lng,
     checkin_date: b.checkin_date, checkout_date: b.checkout_date,
     hotel_code: hotel.code, hotel_name: hotel.name, hotel_price_per_night: hotel.price_per_night, hotel_map_link: hotel.map_link, hotel_lat: hotel.lat, hotel_lng: hotel.lng,
+    hotel_candidates: hotelCandidatesJson,
     muster_name: muster ? muster.muster_name : null, muster_lat: muster ? muster.lat : null, muster_lng: muster ? muster.lng : null,
     muster_reason: b.muster_reason || null,
     far_reason: b.far_reason || null,
@@ -379,7 +432,7 @@ app.patch('/api/requests/:id', async (req, res) => {
   const id = req.params.id;
   const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
-  const { action, actor, reason, confirmation_no } = req.body;
+  const { action, actor, reason, confirmation_no, chosen_hotel_code } = req.body;
   let update = null;
 
   if (action === 'approve') {
@@ -391,7 +444,14 @@ app.patch('/api/requests/:id', async (req, res) => {
   } else if (action === 'confirm') {
     if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องอนุมัติก่อนถึงจะกดจองสำเร็จได้' });
     if (!confirmation_no) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
-    update = { status: 'done', confirmation_no, done_by: actor, done_at: new Date().toISOString() };
+    const candidates = r.hotel_candidates || [];
+    const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
+    if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจาก 5 อันดับที่เลือกไว้' });
+    update = {
+      status: 'done', confirmation_no, done_by: actor, done_at: new Date().toISOString(),
+      hotel_code: chosen.code, hotel_name: chosen.name, hotel_lat: chosen.lat, hotel_lng: chosen.lng,
+      hotel_price_per_night: chosen.price_per_night, hotel_map_link: chosen.map_link,
+    };
   } else {
     return res.status(400).json({ error: 'ไม่รู้จัก action นี้' });
   }
@@ -416,28 +476,52 @@ app.get('/api/analysis', async (req, res) => {
     const female = r.guests.filter((g) => g.gender === 'F').length;
     return { oddMale: male % 2 === 1, oddFemale: female % 2 === 1 };
   };
+  const FUEL_BAHT_PER_KM = 6;
+  const brief = (r) => ({ id: r.id, branch: r.branch.name, team: r.team_code, dates: `${r.checkin_date} – ${r.checkout_date}`, hotel: r.hotel?.name, guests: r.guests.length });
 
-  const suggestions = [];
+  const sameHotelGroup = []; // Type A: อยู่ที่พักเดียวกันอยู่แล้ว รวมห้องได้ไหม
+  const nearbyBranchGroup = []; // Type B: สาขาใกล้กัน ย้ายไปพักที่เดียวกันได้ไหม
+
   for (let i = 0; i < reqs.length; i++) {
     for (let j = i + 1; j < reqs.length; j++) {
       const a = reqs[i], b = reqs[j];
       if (!overlaps(a, b)) continue;
-      const sameHotel = a.hotel_code && a.hotel_code === b.hotel_code;
-      const branchKm = a.branch.lat != null && b.branch.lat != null ? haversineKm(a.branch.lat, a.branch.lng, b.branch.lat, b.branch.lng) : null;
-      const nearbyBranch = !sameHotel && branchKm != null && branchKm <= 10;
-      if (!sameHotel && !nearbyBranch) continue;
+      if (!a.hotel || !b.hotel || a.branch.lat == null || b.branch.lat == null) continue;
 
       const gA = genderCounts(a), gB = genderCounts(b);
-      const roomShare = sameHotel && ((gA.oddMale && gB.oddMale) || (gA.oddFemale && gB.oddFemale));
+      const sameGenderLeftover = (gA.oddMale && gB.oddMale) || (gA.oddFemale && gB.oddFemale);
+      const sameHotel = a.hotel_code && a.hotel_code === b.hotel_code;
 
-      suggestions.push({
-        a: { id: a.id, branch: a.branch.name, team: a.team_code, dates: `${a.checkin_date} – ${a.checkout_date}`, hotel: a.hotel?.name },
-        b: { id: b.id, branch: b.branch.name, team: b.team_code, dates: `${b.checkin_date} – ${b.checkout_date}`, hotel: b.hotel?.name },
-        sameHotel, nearbyBranch, branchKm, roomShare,
+      if (sameHotel) {
+        if (!sameGenderLeftover) continue; // อยู่ที่เดียวกันอยู่แล้วแต่ไม่มีเศษเพศเดียวกัน ไม่มีอะไรให้แนะนำเพิ่ม
+        sameHotelGroup.push({ a: brief(a), b: brief(b), hotel: a.hotel.name, roomsBefore: a.rooms + b.rooms, roomsAfter: roomsNeeded([...a.guests, ...b.guests]) });
+        continue;
+      }
+
+      const branchKm = haversineKm(a.branch.lat, a.branch.lng, b.branch.lat, b.branch.lng);
+      if (branchKm == null || branchKm > 10 || !sameGenderLeftover) continue; // ไม่ใกล้กันพอ หรือรวมแล้วไม่ได้ลดห้องจริง ไม่มีประโยชน์จะแนะนำ
+
+      const distAtoA = haversineKm(a.branch.lat, a.branch.lng, a.hotel.lat, a.hotel.lng) || 0;
+      const distBtoB = haversineKm(b.branch.lat, b.branch.lng, b.hotel.lat, b.hotel.lng) || 0;
+      const distAtoB = haversineKm(a.branch.lat, a.branch.lng, b.hotel.lat, b.hotel.lng) || 0;
+      const distBtoA = haversineKm(b.branch.lat, b.branch.lng, a.hotel.lat, a.hotel.lng) || 0;
+      const viaAHotel = distAtoA + distBtoA; // ทั้งคู่พักที่โรงแรมของ a
+      const viaBHotel = distAtoB + distBtoB; // ทั้งคู่พักที่โรงแรมของ b
+      const useA = viaAHotel <= viaBHotel;
+      const combinedOneWayKm = useA ? viaAHotel : viaBHotel;
+      const separateOneWayKm = distAtoA + distBtoB;
+      const separateCost = Math.round(separateOneWayKm * 2 * FUEL_BAHT_PER_KM);
+      const combinedCost = Math.round(combinedOneWayKm * 2 * FUEL_BAHT_PER_KM);
+
+      nearbyBranchGroup.push({
+        a: brief(a), b: brief(b), branchKm: Math.round(branchKm * 10) / 10,
+        suggestedHotel: useA ? a.hotel.name : b.hotel.name,
+        roomsBefore: a.rooms + b.rooms, roomsAfter: roomsNeeded([...a.guests, ...b.guests]),
+        fuel: { separateCost, combinedCost, savings: separateCost - combinedCost, ratePerKm: FUEL_BAHT_PER_KM },
       });
     }
   }
-  res.json({ suggestions });
+  res.json({ sameHotel: sameHotelGroup, nearbyBranch: nearbyBranchGroup });
 });
 
 // ---------- จัดการข้อมูล (เฉพาะผู้อนุมัติ) ----------
@@ -461,6 +545,7 @@ app.post('/api/admin/staff', requireApprover, async (req, res) => {
     code: normCell(b.code), name: normCell(b.name), nickname: normCell(b.nickname),
     gender: b.gender, team_code: normCell(b.team_code), category: b.category,
     role: normCell(b.role), province: normCell(b.province), phone: normCell(b.phone),
+    area_owner: normCell(b.area_owner),
     home_lat: b.home_lat != null && b.home_lat !== '' ? Number(b.home_lat) : null,
     home_lng: b.home_lng != null && b.home_lng !== '' ? Number(b.home_lng) : null,
   };
@@ -482,6 +567,7 @@ app.put('/api/admin/staff/:code/:category', requireApprover, async (req, res) =>
   const update = {
     name: normCell(b.name), nickname: normCell(b.nickname), gender: b.gender,
     team_code: normCell(b.team_code), role: normCell(b.role), province: normCell(b.province), phone: normCell(b.phone),
+    area_owner: normCell(b.area_owner),
     home_lat: b.home_lat != null && b.home_lat !== '' ? Number(b.home_lat) : null,
     home_lng: b.home_lng != null && b.home_lng !== '' ? Number(b.home_lng) : null,
   };
@@ -498,6 +584,18 @@ app.delete('/api/admin/staff/:code/:category', requireApprover, async (req, res)
   if (error) return res.status(500).json({ error: 'ลบไม่สำเร็จ: ' + error.message });
   await ref.forceRefresh();
   res.json({ ok: true });
+});
+
+app.get('/api/admin/staff-sync-status', requireApprover, (req, res) => {
+  res.json(ref.getStaffSyncStatus());
+});
+app.post('/api/admin/staff-sync-now', requireApprover, async (req, res) => {
+  try {
+    await ref.forceRefresh();
+    res.json(ref.getStaffSyncStatus());
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.get('/api/admin/branches', requireApprover, async (req, res) => {

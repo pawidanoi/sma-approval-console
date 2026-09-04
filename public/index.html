@@ -128,7 +128,9 @@
         </div>
 
         <div class="card step" id="hotelStepCard" style="display:none;">
-          <div class="step-head"><span class="step-num">5</span>เลือกที่พัก</div>
+          <div class="step-head"><span class="step-num">5</span>เลือกที่พัก (แตะเรียงลำดับ 3-5 ที่ อันดับ 1 = ที่จะจองจริง ที่เหลือสำรอง)</div>
+          <div class="guest-chip-row" id="hotelChipRow"></div>
+          <div id="hotelPickError" style="color:var(--danger-deep); font-size:12px;"></div>
           <div id="nearHotelsList"></div>
           <button class="btn btn-ghost btn-sm" id="showFarBtn" style="align-self:flex-start; color:var(--ink-soft); display:inline-flex; align-items:center; gap:6px;" onclick="toggleFarHotels()"><svg width="17" height="17" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--info)" stroke="var(--ink)" stroke-width="7"/><circle cx="41" cy="41" r="16" fill="none" stroke="#fff" stroke-width="8"/><line x1="53" y1="53" x2="72" y2="72" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg> ดูที่พักไกลกว่านี้</button>
           <div id="farHotelsList" style="display:none;"></div>
@@ -193,9 +195,7 @@
       <div class="split">
         <div class="view active" data-view="approver-queue-list">
           <div class="page-head"><div><h2>คิวรออนุมัติ</h2><div class="sub" id="approverSubtitle"></div></div></div>
-          <div class="snap-grid" style="grid-template-columns:1fr; margin-bottom:12px;">
-            <div class="snap"><div class="ic"><svg width="24" height="24" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--warning)" stroke="var(--ink)" stroke-width="7"/><circle cx="50" cy="48" r="23" fill="none" stroke="#fff" stroke-width="8"/><line x1="50" y1="48" x2="50" y2="32" stroke="#fff" stroke-width="7" stroke-linecap="round"/><line x1="50" y1="48" x2="62" y2="56" stroke="#fff" stroke-width="7" stroke-linecap="round"/></svg></div><div class="tx"><b class="num" id="approverPendingCount">0</b><span>รออนุมัติ</span></div></div>
-          </div>
+          <div class="snap-grid" id="approverStats" style="margin-bottom:12px;"></div>
           <div id="approverArchiveToggle" style="margin-bottom:10px;"></div>
           <div class="req-grid" style="grid-template-columns:1fr;" id="approverList"></div>
         </div>
@@ -207,7 +207,9 @@
 
     <div class="view" data-view="analysis">
       <div class="col-wide" style="max-width:900px;">
-        <div class="page-head"><div><h2>วิเคราะห์ที่พักรวม</h2><div class="sub">แผนที่วันซ้อนกันและอยู่ใกล้กัน หรือเลือกที่พักเดียวกันอยู่แล้ว — รวมข้อมูลทั้งสายกิจกรรมและ setup</div></div></div>
+        <div class="page-head"><div><h2>วิเคราะห์ที่พักรวม</h2><div class="sub">หาแผนที่วันทับซ้อนกันและควรพักรวมกัน — รวมข้อมูลทั้งสายกิจกรรมและ setup</div></div></div>
+        <div class="snap-grid" id="analysisStats"></div>
+        <div class="analysis-tabs" id="analysisTabs"></div>
         <div id="analysisList"></div>
       </div>
     </div>
@@ -239,6 +241,7 @@
             <span>พนักงาน</span>
             <button class="btn btn-primary btn-sm" onclick="openStaffForm(null)">+ เพิ่มพนักงาน</button>
           </div>
+          <div class="note-box muted" style="font-size:12px;"><b>สายกิจกรรม</b>ชื่อ/ทีม/เบอร์โทร ซิงค์อัตโนมัติจากชีต HR ทุก 10 นาที (แก้ตำแหน่ง/role ได้ที่นี่ตามปกติ) — <b id="staffSyncStatusText">กำลังโหลด...</b> <a href="#" onclick="event.preventDefault(); syncStaffNow();" style="font-weight:700;">ซิงค์ตอนนี้</a></div>
           <div style="display:flex; gap:8px;">
             <div class="combo" style="flex:1;">
               <div class="combo-input"><span class="ic"><svg width="18" height="18" viewBox="0 0 100 100" class="ic-svg"><rect x="6" y="6" width="88" height="88" rx="26" fill="var(--info)" stroke="var(--ink)" stroke-width="7"/><circle cx="41" cy="41" r="16" fill="none" stroke="#fff" stroke-width="8"/><line x1="53" y1="53" x2="72" y2="72" stroke="#fff" stroke-width="9" stroke-linecap="round"/></svg></span><input type="text" id="adminStaffSearch" autocomplete="off" placeholder="พิมพ์ชื่อ / รหัสพนักงาน / ทีม เพื่อค้นหา" oninput="searchAdminStaff(this.value)" onfocus="searchAdminStaff(this.value)"></div>
@@ -272,7 +275,10 @@
             <div><span class="field-label">ตำแหน่ง</span><input type="text" id="sfRole" placeholder="ผู้จอง / ผู้อนุมัติ / พนักงาน ฯลฯ"></div>
             <div><span class="field-label">เบอร์โทร</span><input type="text" id="sfPhone"></div>
           </div>
-          <span class="field-label">จังหวัด (บ้าน)</span><input type="text" id="sfProvince">
+          <div class="field-row">
+            <div><span class="field-label">จังหวัด (บ้าน)</span><input type="text" id="sfProvince"></div>
+            <div><span class="field-label">Area ที่ดูแลทีมนี้</span><input type="text" id="sfAreaOwner" placeholder="ชื่อเล่นผู้จอง เช่น อิ๋ม (ใช้จำกัดว่าใครจองทีมนี้ได้)"></div>
+          </div>
           <div id="staffFormError"></div>
           <div style="display:flex; gap:8px; margin-top:6px;">
             <button class="btn btn-primary" onclick="saveStaffForm()">บันทึก</button>
