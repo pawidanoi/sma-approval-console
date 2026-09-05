@@ -5,8 +5,8 @@ let approverCategory = null;
 let form = {
   category: null, missionType: null, teamCode: null,
   musterPoints: [], chosenMuster: null,
-  branch: null, musterCheck: null, hotelMaxKm: null,
-  selectedHotels: [], guests: [],
+  branch: null, branch2: null, musterCheck: null, hotelMaxKm: null,
+  selectedHotels: [], guests: [], scheduleEntryId: null,
 };
 let detailCtx = { backTarget: 'booker-home', readonly: false, requestId: null };
 
@@ -24,6 +24,25 @@ async function api(path, opts) {
   return data;
 }
 function errBox(msg) { return `<div class="error-box">${msg}</div>`; }
+// แทน confirm()/alert() ของเบราว์เซอร์ ด้วยกล่องในธีมตัวเอง — native dialog บางเบราว์เซอร์กดแล้วไม่มีผล/มองไม่เห็นชัด
+function confirmDialog(msg) {
+  return new Promise((resolve) => {
+    el('confirmModalMsg').textContent = msg;
+    el('confirmModal').style.display = 'flex';
+    const cleanup = (result) => { el('confirmModal').style.display = 'none'; okBtn.onclick = null; cancelBtn.onclick = null; resolve(result); };
+    const okBtn = el('confirmModalOk'), cancelBtn = el('confirmModalCancel');
+    okBtn.onclick = () => cleanup(true);
+    cancelBtn.onclick = () => cleanup(false);
+  });
+}
+function alertDialog(msg) {
+  return new Promise((resolve) => {
+    el('alertModalMsg').textContent = msg;
+    el('alertModal').style.display = 'flex';
+    const okBtn = el('alertModalOk');
+    okBtn.onclick = () => { el('alertModal').style.display = 'none'; okBtn.onclick = null; resolve(); };
+  });
+}
 function copyText(text, btn) {
   navigator.clipboard.writeText(text).then(() => flashCopied(btn)).catch(() => {
     const ta = document.createElement('textarea');
@@ -103,13 +122,16 @@ function emptyStateHtml(kind, title, subtitle) {
 const AV_COLORS = [['#FF6A3D','#E14F22'], ['#2FB24A','#1E8536'], ['#2CA6D8','#1C7CA3'], ['#F0453B','#C62E27'], ['#FFC22B','#C6890A']];
 const GENDER_COLORS = { M: '#2CA6D8', F: '#FF5C8A' };
 const GENDER_RANK = { M: 0, F: 1 };
+// สี AREA คงที่ 4 สี ไม่ซ้ำกัน — ให้จำผู้จองแต่ละคนได้ทันทีจากสีเดียวกันทุกที่ในระบบ
+const AREA_COLORS = { 'ติ': '#7C4DFF', 'อิ๋ม': '#FF3D81', 'เมา': '#00B8A9', 'หนุ่ย': '#FF9800' };
+function bareNickname(name) { return (name || '').trim().replace(/^(พี่|คุณ|นางสาว|นาย|นาง)/, '').trim(); }
 function sortByGender(guests) {
   return guests.map((g, i) => [g, i]).sort((a, b) => (GENDER_RANK[a[0].gender] ?? 2) - (GENDER_RANK[b[0].gender] ?? 2) || a[1] - b[1]).map((pair) => pair[0]);
 }
 function avatarPair(seed) { let h = 0; for (const c of String(seed || '?')) h = (h * 31 + c.charCodeAt(0)) >>> 0; return AV_COLORS[h % AV_COLORS.length]; }
 function avatarHtml(name, size, gender) {
   const initial = (name || '?').trim()[0] || '?';
-  const c1 = GENDER_COLORS[gender] || avatarPair(name)[0];
+  const c1 = AREA_COLORS[bareNickname(name)] || GENDER_COLORS[gender] || avatarPair(name)[0];
   const s = size || 32;
   return `<div class="avatar" style="width:${s}px;height:${s}px;font-size:${Math.round(s * 0.4)}px;background:${c1};">${initial}</div>`;
 }
@@ -144,18 +166,19 @@ function selectRole(role, category) {
   el('whoAv').outerHTML = avatarHtml(emp.nickname || emp.name, 32, emp.gender).replace('class="avatar"', 'class="avatar" id="whoAv"');
   el('whoName').textContent = emp.nickname || emp.name;
   el('whoRole').textContent = role === 'approver' ? 'ผู้อนุมัติ · ' + CATEGORY_LABEL[category] : role === 'booker' ? 'ผู้จอง' : 'พนักงาน';
-  const tabs = { booker: [['booker-home', 'แผนของฉัน'], ['booker-form', 'สร้างคำขอจอง']], approver: [['approver-queue', 'คิวรออนุมัติ'], ['analysis', 'วิเคราะห์รวม'], ['dashboard', 'แดชบอร์ด'], ['admin-data', 'จัดการข้อมูล']], employee: [['employee-view', 'ค้นหาแผน']] };
+  const tabs = { booker: [['booker-home', 'แผนของฉัน'], ['schedule-to-book', 'แผนงานที่ต้องจอง'], ['booker-form', 'สร้างคำขอจอง'], ['booker-vacancy', 'ห้องว่าง'], ['hotel-reviews', 'รีวิวที่พัก']], approver: [['approver-queue', 'คิวรออนุมัติ'], ['schedule-all', 'แผนงานทั้งหมด'], ['analysis', 'วิเคราะห์รวม'], ['dashboard', 'แดชบอร์ด'], ['hotel-reviews', 'รีวิวที่พัก'], ['admin-data', 'จัดการข้อมูล']], employee: [['employee-view', 'ค้นหาแผน'], ['hotel-reviews', 'รีวิวที่พัก']] };
   const tb = el('tabbar'); tb.innerHTML = '';
   tabs[role].forEach(([id, label], i) => {
     const b = document.createElement('button');
     b.className = 'tabbtn' + (i === 0 ? ' on' : '');
     b.textContent = label; b.dataset.view = id;
-    b.onclick = () => { showView(id); if (id === 'booker-home') loadBookerHome(); if (id === 'approver-queue') loadApproverQueue(); if (id === 'dashboard') loadDashboard(); if (id === 'analysis') loadAnalysis(); if (id === 'admin-data') loadAdminData(); };
+    b.onclick = () => { showView(id); if (id === 'booker-home') loadBookerHome(); if (id === 'approver-queue') loadApproverQueue(); if (id === 'dashboard') loadDashboard(); if (id === 'analysis') loadAnalysis(); if (id === 'admin-data') loadAdminData(); if (id === 'booker-vacancy') loadVacancyList(); if (id === 'hotel-reviews') openHotelReviewList(); if (id === 'employee-view') loadEmployeeView(); if (id === 'schedule-to-book') loadScheduleToBook(); if (id === 'schedule-all') loadScheduleAll(); };
     tb.appendChild(b);
   });
   showView(tabs[role][0][0]);
   if (role === 'booker') loadBookerHome();
   if (role === 'approver') loadApproverQueue();
+  if (role === 'employee') loadEmployeeView();
 }
 function logout() {
   session = null; currentRole = null; approverCategory = null;
@@ -218,9 +241,206 @@ function bookerCardHtml(r) {
   </div>`;
 }
 
+// ===== booker: ห้องว่าง (จองสำเร็จแล้ว มีห้องว่างเหลือ) — เพิ่มผู้เข้าพักเข้าห้องเดิมได้เลย ไม่ต้องจองใหม่ =====
+function bookerCategory() {
+  return session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category)[0] || 'activity';
+}
+let vacancyReqs = [];
+async function loadVacancyList() {
+  const data = await api('/api/vacancies?category=' + encodeURIComponent(bookerCategory()));
+  vacancyReqs = data.vacancies;
+  renderVacancyList();
+}
+function renderVacancyList() {
+  el('vacancyList').innerHTML = vacancyReqs.length
+    ? '<div class="req-grid">' + vacancyReqs.map(vacancyCardHtml).join('') + '</div>'
+    : emptyStateHtml('suitcase', 'ไม่มีห้องว่างตอนนี้', 'รายการที่จองสำเร็จแล้วและมีห้องว่างเหลือจะมาอยู่ที่นี่');
+}
+function vacancyCardHtml(r) {
+  const genderLabel = r.spareGender === 'M' ? 'ชาย' : 'หญิง';
+  return `<div class="trav-card">
+    <div class="trav-top">${avatarHtml(r.createdByName || r.team_code, 36)}<div class="info"><h3>${r.branch?.name || r.branch_code}</h3><div class="sub">${r.team_code || ''} · จองโดย ${r.createdByName}</div></div><span class="pill ${r.inStay ? 'pill-accent' : 'pill-success'}">${r.inStay ? 'กำลังเข้าพัก' : 'ยังไม่เช็คอิน'}</span></div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${icon('hotel', 14)} ${r.hotel?.name || '-'}</span></div>
+    <div class="trav-meta" style="border-top:none; padding-top:0;">${icon('users', 14)} ชาย ${r.maleCount} · หญิง ${r.femaleCount}<span class="dot"></span><span style="color:var(--success-deep); font-weight:700;">เหลือห้องว่าง 1 ที่ (${genderLabel})</span></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="openAddGuest(${r.id})">${icon('users', 14)} ขอเพิ่มผู้เข้าพัก</button>
+  </div>`;
+}
+
+let addGuestCtx = { requestId: null, request: null, guests: [] };
+function isAddGuestSelected(code) {
+  return (addGuestCtx.request?.guests || []).some((g) => g.employee_code === code) || addGuestCtx.guests.some((g) => g.employee_code === code);
+}
+function openAddGuest(id) {
+  const r = vacancyReqs.find((v) => v.id === id);
+  if (!r) return;
+  addGuestCtx = { requestId: id, request: r, guests: [] };
+  el('addGuestError').innerHTML = '';
+  el('addGuestSubtitle').textContent = `${r.branch?.name || ''} · ${r.checkin_date} – ${r.checkout_date} · เพศที่ว่าง: ${r.spareGender === 'M' ? 'ชาย' : 'หญิง'}`;
+  el('addGuestSearch').value = ''; el('addGuestAcList').innerHTML = ''; el('addGuestAcList').style.display = 'none';
+  el('addGuestNewForm').style.display = 'none';
+  renderAddGuestChips();
+  showView('add-guest');
+}
+async function searchAddGuest(q) {
+  const r = addGuestCtx.request;
+  const params = new URLSearchParams({ category: bookerCategory(), q: q || '', checkin: r?.checkin_date || '', checkout: r?.checkout_date || '' });
+  const data = await api('/api/staff?' + params.toString());
+  const rows = data.staff.filter((s) => !isAddGuestSelected(s.code));
+  const listEl = el('addGuestAcList');
+  if (!rows.length) { listEl.innerHTML = '<div class="combo-empty">ไม่พบพนักงาน</div>'; listEl.style.display = 'block'; return; }
+  listEl.innerHTML = rows.map((s) => {
+    const blocked = !!s.openBooking;
+    return `<div class="combo-item ${blocked ? 'staff-blocked' : ''}" ${blocked ? '' : `onclick='addGuestFromStaffToAddCtx(${JSON.stringify(s)})'`}>
+      <span>${s.name} (${s.nickname || s.team_code || '-'})</span>
+      <span class="meta">${blocked ? 'มีแผนจองแล้ว (' + s.openBooking.branch + ' ' + s.openBooking.dates + ')' : s.team_code || ''}</span>
+    </div>`;
+  }).join('');
+  listEl.style.display = 'block';
+}
+function addGuestFromStaffToAddCtx(staff) {
+  if (isAddGuestSelected(staff.code) || staff.openBooking) return;
+  addGuestCtx.guests.push({ employee_code: staff.code, name: staff.name, phone: staff.phone, gender: staff.gender, nickname: staff.nickname });
+  el('addGuestSearch').value = ''; el('addGuestAcList').style.display = 'none';
+  renderAddGuestChips();
+}
+function removeAddGuest(idx) { addGuestCtx.guests.splice(idx, 1); renderAddGuestChips(); }
+function showAddGuestNewForm() { el('addGuestNewForm').style.display = 'flex'; }
+function addNewAddGuest() {
+  const name = el('addGuestNewName').value.trim();
+  if (!name) return;
+  addGuestCtx.guests.push({ employee_code: el('addGuestNewCode').value.trim() || null, name, gender: el('addGuestNewGender').value });
+  el('addGuestNewCode').value = ''; el('addGuestNewName').value = ''; el('addGuestNewForm').style.display = 'none';
+  renderAddGuestChips();
+}
+function renderAddGuestChips() {
+  el('addGuestChipRow').innerHTML = addGuestCtx.guests.map((g, i) => `
+    <div class="guest-chip">${avatarHtml(g.name, 22, g.gender)}${g.name}${g.nickname ? ' (' + g.nickname + ')' : ''}${!g.employee_code ? ' <span class="new-tag">ใหม่</span>' : ''}<span class="x" onclick="removeAddGuest(${i})">${icon('x', 12)}</span></div>`
+  ).join('');
+}
+async function submitAddGuests() {
+  el('addGuestError').innerHTML = '';
+  if (!addGuestCtx.guests.length) { el('addGuestError').innerHTML = errBox('ต้องเลือกผู้เข้าพักที่จะเพิ่มอย่างน้อย 1 คน'); return; }
+  try {
+    el('addGuestSubmitBtn').disabled = true;
+    await api(`/api/requests/${addGuestCtx.requestId}/add-guests`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ actor: session.employee.code, guests: addGuestCtx.guests }) });
+    showView('booker-vacancy'); loadVacancyList();
+  } catch (e) {
+    el('addGuestError').innerHTML = errBox(e.message);
+  } finally {
+    el('addGuestSubmitBtn').disabled = false;
+  }
+}
+
+// ===== booker: แผนงานที่ต้องจอง (นำเข้าจากแผนงาน NSA — เห็นเฉพาะทีมที่ดูแล กด "จองเลย" แล้วฟอร์มจองเติมให้อัตโนมัติ) =====
+let scheduleItems = [];
+async function loadScheduleToBook() {
+  const data = await api('/api/schedule-to-book?actor=' + encodeURIComponent(session.employee.code));
+  scheduleItems = data.items;
+  renderScheduleToBook();
+}
+function renderScheduleToBook() {
+  el('scheduleToBookList').innerHTML = scheduleItems.length
+    ? '<div class="req-grid">' + scheduleItems.map(scheduleItemHtml).join('') + '</div>'
+    : emptyStateHtml('allDone', 'ไม่มีแผนงานที่ต้องจองตอนนี้', 'รายการจากแผนงานที่ยังไม่ได้จองจะมาอยู่ที่นี่');
+}
+function scheduleItemHtml(it) {
+  return `<div class="trav-card">
+    <div class="trav-top">${avatarHtml(it.team_code, 36)}<div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.team_code} · ${it.mission_type || '-'}</div></div>${it.paired_branch ? '<span class="pill pill-warning">ทีมย่อย 2 สาขา</span>' : ''}</div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span></div>
+    <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='bookFromSchedule(${JSON.stringify(it)})'>${icon('check', 14)} จองเลย</button>
+  </div>`;
+}
+async function bookFromSchedule(item) {
+  showView('booker-form'); resetForm();
+  form.scheduleEntryId = item.id;
+  form.category = 'activity';
+  const seg = el('teamCatSeg');
+  if (seg.querySelector('.seg[data-val]')) seg.querySelectorAll('.seg').forEach((s) => s.classList.toggle('on', s.dataset.val === 'activity'));
+  await loadMissionGrid();
+  if (item.mission_type) {
+    form.missionType = item.mission_type;
+    document.querySelectorAll('#missionGrid .mission-btn').forEach((b) => b.classList.toggle('on', b.textContent === item.mission_type));
+  }
+  await chooseTeam(item.team_code);
+  form.branch2 = item.paired_branch || null;
+  form.branch = item.branch;
+  el('fBranchChosen').innerHTML = `<div class="pill pill-accent" style="font-size:12.5px; padding:8px 12px;">${icon('pin', 14)} ${item.branch.name} · ${item.branch.province || ''} <span style="cursor:pointer; margin-left:6px; display:inline-flex;" onclick="clearBranch()">${icon('x', 13)}</span></div>`;
+  await runMusterCheck();
+  el('fCheckin').value = item.suggested_checkin;
+  el('fCheckout').value = item.suggested_checkout;
+  checkDatesReady();
+}
+
+// ===== ผู้อนุมัติ: แผนงานทั้งหมด (จองแล้ว/ยังไม่จอง) + เตือน Area ให้มาจอง =====
+let scheduleAllItems = [];
+async function loadScheduleAll() {
+  const data = await api('/api/schedule-all?category=' + approverCategory);
+  scheduleAllItems = data.items;
+  renderScheduleAll();
+}
+function renderScheduleAll() {
+  el('scheduleAllList').innerHTML = scheduleAllItems.length
+    ? '<div class="req-grid">' + scheduleAllItems.map(scheduleAllItemHtml).join('') + '</div>'
+    : emptyStateHtml('allDone', 'ไม่มีแผนงานอยู่ในระบบตอนนี้', '');
+}
+function scheduleAllItemHtml(it) {
+  const statusPill = it.matched
+    ? `<span class="pill ${STATUS_LABEL[it.matched.status][1]}">${STATUS_LABEL[it.matched.status][0]}</span>`
+    : `<span class="pill pill-danger">ยังไม่จอง</span>`;
+  return `<div class="trav-card" style="cursor:default;">
+    <div class="trav-top">${avatarHtml(it.team_code, 36)}<div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.team_code} · ${it.mission_type || '-'}${it.area_owner ? ' · ผู้จอง: ' + (it.area_owner.nickname || it.area_owner.code) : ' · ยังไม่ได้ตั้ง Area ดูแล'}</div></div>${statusPill}</div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span>${it.matched?.hotel_name ? `<span class="dot"></span><span>${icon('hotel', 14)} ${it.matched.hotel_name}</span>` : ''}</div>
+    <div style="display:flex; gap:8px; margin-top:10px;">
+      ${!it.matched ? `<button class="btn btn-primary btn-sm" id="remind-${it.id}" onclick="remindScheduleEntry(${it.id})">${icon('alert', 14)} เตือน Area ให้มาจอง</button>` : ''}
+      <button class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="deleteScheduleEntry(${it.id})">${icon('undo', 14)} ลบรายการนี้</button>
+    </div>
+  </div>`;
+}
+async function deleteScheduleEntry(id) {
+  if (!(await confirmDialog('ลบแผนงานรายการนี้ออกจากระบบ?'))) return;
+  try {
+    await api(`/api/schedule-entries/${id}?actor=${encodeURIComponent(session.employee.code)}`, { method: 'DELETE' });
+    loadScheduleAll();
+  } catch (e) {
+    alertDialog(e.message);
+  }
+}
+async function remindScheduleEntry(id) {
+  const btn = el('remind-' + id);
+  btn.disabled = true; btn.textContent = 'กำลังส่ง...';
+  try {
+    const data = await api(`/api/schedule-entries/${id}/remind?actor=${encodeURIComponent(session.employee.code)}`, { method: 'POST' });
+    btn.textContent = data.sent ? '✓ เตือนแล้ว' : 'ส่งไม่สำเร็จ: ' + (data.reason || '');
+    if (!data.sent) btn.disabled = false;
+  } catch (e) {
+    btn.textContent = 'ส่งไม่สำเร็จ'; btn.disabled = false;
+  }
+}
+
+// ===== พนักงาน: แผนงานทีมตัวเอง (อันไหนจองแล้วพักที่ไหน อันไหนยังไม่จอง) =====
+async function loadEmployeeSchedule() {
+  try {
+    const data = await api('/api/schedule-mine?code=' + encodeURIComponent(session.employee.code));
+    el('empScheduleResult').innerHTML = data.items.length
+      ? '<div class="req-grid">' + data.items.map(scheduleMineItemHtml).join('') + '</div>'
+      : '<p class="empty-hint">ทีมคุณยังไม่มีแผนงานนำเข้าในระบบ</p>';
+  } catch (e) {
+    el('empScheduleResult').innerHTML = errBox(e.message);
+  }
+}
+function scheduleMineItemHtml(it) {
+  const statusPill = it.matched
+    ? `<span class="pill ${STATUS_LABEL[it.matched.status][1]}">${STATUS_LABEL[it.matched.status][0]}</span>`
+    : `<span class="pill pill-danger">ยังไม่จอง</span>`;
+  return `<div class="trav-card" style="cursor:default;">
+    <div class="trav-top"><div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.mission_type || '-'}</div></div>${statusPill}</div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span>${it.matched?.hotel_name ? `<span class="dot"></span><span>${icon('hotel', 14)} ${it.matched.hotel_name}</span>` : ''}</div>
+  </div>`;
+}
+
 // ===== booker form =====
 function resetForm() {
-  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [] };
+  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, branch2: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [], scheduleEntryId: null };
   el('formError').innerHTML = ''; el('hotelChipRow').innerHTML = ''; el('hotelPickError').textContent = '';
   el('fBranchSearch').value = ''; el('fBranchChosen').innerHTML = '';
   el('fCheckin').value = ''; el('fCheckout').value = '';
@@ -228,9 +448,10 @@ function resetForm() {
   el('musterPointBox').innerHTML = ''; el('musterCheckBox').innerHTML = '';
   el('guestSearch').value = ''; el('guestChipRow').innerHTML = '';
   el('otherTeamBox').style.display = 'none'; el('teamRosterList').style.display = 'none'; el('guestAcList').style.display = 'none';
+  el('newGuestCode').value = ''; el('newGuestName').value = ''; el('addGuestForm').style.display = 'none';
   ['branchStepCard', 'hotelStepCard', 'dateStepCard', 'guestStepCard'].forEach((id) => (el(id).style.display = 'none'));
   el('nearHotelsList').innerHTML = ''; el('farHotelsList').innerHTML = ''; el('farHotelsList').style.display = 'none';
-  el('farReasonBox').style.display = 'none'; el('distanceMapBox').innerHTML = '';
+  el('farReasonBox').style.display = 'none'; el('fFarReason').value = ''; el('distanceMapBox').innerHTML = '';
 
   const bookerCats = session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category);
   const seg = el('teamCatSeg');
@@ -347,7 +568,9 @@ async function runMusterCheck() {
 }
 
 async function loadHotels() {
-  const data = await api(`/api/hotels-near?branch=${encodeURIComponent(form.branch.code)}&category=${form.category}`);
+  const params = new URLSearchParams({ branch: form.branch.code, category: form.category });
+  if (form.branch2) params.set('branch2', form.branch2.code);
+  const data = await api('/api/hotels-near?' + params.toString());
   form.hotelMaxKm = data.hotelMaxKm;
   el('nearHotelsList').innerHTML = data.near.map(hotelRowHtml).join('') || `<p class="empty-hint">ไม่พบที่พักในรัศมี ${data.hotelMaxKm} กม. ลองดูที่พักไกลกว่านี้</p>`;
   el('farHotelsList').innerHTML = data.far.map(hotelRowHtml).join('');
@@ -355,20 +578,119 @@ async function loadHotels() {
 }
 function hotelRank(code) { return form.selectedHotels.findIndex((h) => h.code === code); }
 function hotelRowHtml(h) {
-  const far = h.distance_km > form.hotelMaxKm;
+  const dual = !!form.branch2;
+  const far = dual ? (h.distance_km_a > form.hotelMaxKm || h.distance_km_b > form.hotelMaxKm) : h.distance_km > form.hotelMaxKm;
   const rank = hotelRank(h.code);
   const badge = rank === -1
     ? `<div class="radio" style="${far ? 'border-color:var(--warning);' : ''}"></div>`
     : `<div class="avatar" style="width:22px;height:22px;font-size:11px;background:var(--accent);border-width:2px;">${rank + 1}</div>`;
+  const distLabel = dual
+    ? `${h.distance_km_a} กม. (${form.branch.name}) + ${h.distance_km_b} กม. (${form.branch2.name}) = ${h.distance_km} กม. รวม`
+    : `${h.distance_km} กม. จากสาขา`;
   return `<div class="hotel-row" onclick='toggleHotelSelect(${JSON.stringify(h)})'>
     ${badge}
-    <div style="flex:1;"><div class="hotel-name">${h.name}</div>
+    <div style="flex:1;"><div class="hotel-name">${h.name}${h.stay_count ? ` <span class="pill pill-success" style="font-size:10px; padding:2px 8px;">เคยพักแล้ว ${h.stay_count} ครั้ง</span>` : ''}</div>
       <div class="hotel-sub" style="${far ? 'color:var(--warning-deep); font-weight:600;' : ''}">
-        <span>${far ? icon('alert', 13) + ' ' : ''}${h.distance_km} กม. จากสาขา</span>
-        ${h.map_link ? `<a href="${h.map_link}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icon('pin', 13)} ดูรีวิว</a>` : ''}
+        <span>${far ? icon('alert', 13) + ' ' : ''}${distLabel}</span>
+        ${h.map_link ? `<a href="${h.map_link}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${icon('pin', 13)} แผนที่</a>` : ''}
+        <a href="javascript:void(0)" onclick='event.stopPropagation(); openHotelReviewDetail(${JSON.stringify(h)}, "booker-form")'>${icon('search', 13)} ดูรีวิวพนักงาน</a>
       </div></div>
     <div class="hotel-price">${h.price_per_night ?? '-'}.-</div>
   </div>`;
+}
+
+// ===== รีวิวที่พัก (เปิดให้ทุกบทบาทดู/เขียนได้) =====
+function openHotelReviewList() { searchHotelReviewList(''); }
+async function searchHotelReviewList(q) {
+  const data = await api('/api/hotels?q=' + encodeURIComponent(q || ''));
+  el('hotelReviewList').innerHTML = data.hotels.length
+    ? data.hotels.map(hotelReviewRowHtml).join('')
+    : emptyStateHtml('search', 'ไม่พบที่พัก', 'ลองพิมพ์ชื่ออื่น หรือชื่อจังหวัด');
+}
+function hotelReviewRowHtml(h) {
+  return `<div class="hotel-row" onclick='openHotelReviewDetail(${JSON.stringify(h)})'>
+    <div style="flex:1;"><div class="hotel-name">${h.name}</div>
+      <div class="hotel-sub"><span>${h.province || ''}</span>${h.stay_count ? ` <span class="pill pill-success" style="margin-left:6px;">เคยพักแล้ว ${h.stay_count} ครั้ง</span>` : ''}</div></div>
+    <div class="hotel-price">${h.price_per_night ?? '-'}.-</div>
+  </div>`;
+}
+let hotelReviewCtx = { hotel: null, reviews: [], avg: null, count: 0, photos: [] };
+let reviewRating = 0;
+async function openHotelReviewDetail(h, backTo) {
+  hotelReviewCtx = { hotel: h, reviews: [], avg: null, count: 0, photos: [], backTo: backTo || 'hotel-reviews' };
+  reviewRating = 0;
+  showView('hotel-review-detail');
+  await loadHotelReviews(h.code);
+}
+function closeHotelReviewDetail() { showView(hotelReviewCtx.backTo || 'hotel-reviews'); }
+async function loadHotelReviews(code) {
+  const data = await api('/api/hotel-reviews?hotel_code=' + encodeURIComponent(code));
+  hotelReviewCtx.reviews = data.reviews; hotelReviewCtx.avg = data.avg; hotelReviewCtx.count = data.count;
+  renderHotelReviewDetail();
+}
+function starsHtml(rating, size) {
+  const s = size || 14;
+  let out = '';
+  for (let i = 1; i <= 5; i++) out += `<span style="font-size:${s}px; color:${i <= Math.round(rating) ? 'var(--warning)' : 'var(--ink-faint)'};">★</span>`;
+  return out;
+}
+function renderHotelReviewDetail() {
+  const h = hotelReviewCtx.hotel;
+  const stayBadge = h.stay_count ? `<span class="pill pill-success">เคยมีคนไปพักที่นี่แล้ว ${h.stay_count} ครั้ง</span>` : `<span class="pill pill-neutral">ยังไม่มีประวัติเคยพัก</span>`;
+  const avgHtml = hotelReviewCtx.count ? `${starsHtml(hotelReviewCtx.avg, 18)} <b class="num">${hotelReviewCtx.avg}</b> (${hotelReviewCtx.count} รีวิว)` : `<span style="color:var(--ink-faint);">ยังไม่มีรีวิว</span>`;
+  const reviewsHtml = hotelReviewCtx.reviews.map((r) => `
+    <div class="trav-card" style="cursor:default;">
+      <div class="trav-top">${avatarHtml(r.employee_name, 32)}<div class="info"><h3 style="font-size:13.5px;">${r.employee_name || r.employee_code}</h3><div class="sub">${starsHtml(r.rating, 13)} · ${new Date(r.created_at).toLocaleDateString('th-TH')}</div></div></div>
+      ${r.review_text ? `<div class="trav-meta" style="border-top:none; padding-top:0;">${r.review_text}</div>` : ''}
+      ${(r.photo_urls || []).length ? `<div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;">${r.photo_urls.map((u) => `<img src="${u}" style="width:72px; height:72px; object-fit:cover; border-radius:10px; border:2px solid var(--ink);">`).join('')}</div>` : ''}
+    </div>`).join('');
+  el('hotelReviewDetailRoot').innerHTML = `
+    <div class="page-head"><div><h2>${h.name}</h2><div class="sub">${h.province || ''}</div></div></div>
+    <div style="margin-bottom:10px;">${stayBadge}</div>
+    <div class="note-box muted" style="margin-bottom:14px;">${avgHtml}</div>
+    <div class="section-title" style="margin-bottom:8px; display:block;">เขียนรีวิวของคุณ</div>
+    <div class="card step" style="margin-bottom:16px;">
+      <div id="reviewStarPicker" style="font-size:26px;">${[1, 2, 3, 4, 5].map((i) => `<span onclick="setReviewRating(${i})" data-star="${i}" style="color:var(--ink-faint); cursor:pointer;">★</span>`).join('')}</div>
+      <textarea id="reviewText" rows="3" placeholder="เล่าประสบการณ์การเข้าพัก เช่น ห้องสะอาดไหม ใกล้สาขาไหม เดินทางสะดวกไหม"></textarea>
+      <input type="file" id="reviewPhotoInput" accept="image/*" multiple onchange="addReviewPhotos(this.files)">
+      <div id="reviewPhotoPreview" style="display:flex; gap:6px; flex-wrap:wrap;"></div>
+      <div id="reviewError"></div>
+      <button class="btn btn-primary btn-sm" onclick="submitHotelReview()">ส่งรีวิว</button>
+    </div>
+    <div class="section-title" style="margin-bottom:8px; display:block;">รีวิวทั้งหมด (${hotelReviewCtx.count})</div>
+    <div class="req-grid" style="grid-template-columns:1fr; gap:10px;">${reviewsHtml || '<p class="empty-hint">ยังไม่มีใครรีวิวที่พักนี้ เป็นคนแรกได้เลย</p>'}</div>`;
+}
+function setReviewRating(n) {
+  reviewRating = n;
+  document.querySelectorAll('#reviewStarPicker span').forEach((s) => { s.style.color = Number(s.dataset.star) <= n ? 'var(--warning)' : 'var(--ink-faint)'; });
+}
+function addReviewPhotos(files) {
+  for (const f of files) hotelReviewCtx.photos.push(f);
+  renderReviewPhotoPreview();
+}
+function removeReviewPhoto(i) { hotelReviewCtx.photos.splice(i, 1); renderReviewPhotoPreview(); }
+function renderReviewPhotoPreview() {
+  el('reviewPhotoPreview').innerHTML = hotelReviewCtx.photos.map((f, i) => `<span class="guest-chip">${f.name}<span class="x" onclick="removeReviewPhoto(${i})">${icon('x', 12)}</span></span>`).join('');
+}
+async function submitHotelReview() {
+  el('reviewError').innerHTML = '';
+  if (!reviewRating) { el('reviewError').innerHTML = errBox('ต้องให้คะแนนอย่างน้อย 1 ดาว'); return; }
+  const fd = new FormData();
+  fd.append('hotel_code', hotelReviewCtx.hotel.code);
+  fd.append('actor', session.employee.code);
+  fd.append('rating', String(reviewRating));
+  fd.append('review_text', el('reviewText').value.trim());
+  hotelReviewCtx.photos.forEach((f) => fd.append('photos', f));
+  try {
+    const res = await fetch('/api/hotel-reviews', { method: 'POST', body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'ส่งรีวิวไม่สำเร็จ');
+    reviewRating = 0; hotelReviewCtx.photos = [];
+    el('reviewText').value = ''; el('reviewPhotoInput').value = ''; renderReviewPhotoPreview();
+    await loadHotelReviews(hotelReviewCtx.hotel.code);
+  } catch (e) {
+    el('reviewError').innerHTML = errBox(e.message);
+  }
 }
 function toggleHotelSelect(h) {
   const idx = hotelRank(h.code);
@@ -380,14 +702,17 @@ function toggleHotelSelect(h) {
   el('hotelPickError').textContent = '';
   loadHotels();
   const primary = form.selectedHotels[0];
-  el('farReasonBox').style.display = primary && primary.distance_km > form.hotelMaxKm ? 'block' : 'none';
+  const anyFar = form.selectedHotels.some((sh) => form.branch2 ? (sh.distance_km_a > form.hotelMaxKm || sh.distance_km_b > form.hotelMaxKm) : sh.distance_km > form.hotelMaxKm);
+  el('farReasonBox').style.display = anyFar ? 'block' : 'none';
   if (primary) { renderDistanceMap(); el('dateStepCard').style.display = 'flex'; checkDatesReady(); }
   else { el('distanceMapBox').innerHTML = ''; el('dateStepCard').style.display = 'none'; }
 }
 function renderHotelChips() {
   el('hotelChipRow').innerHTML = form.selectedHotels.length
-    ? form.selectedHotels.map((h, i) => `
-      <div class="guest-chip"><span class="avatar" style="width:20px;height:20px;font-size:10px;background:${i === 0 ? 'var(--accent)' : 'var(--info)'};">${i + 1}</span>${h.name}${i === 0 ? ' (หลัก)' : ''}<span class="x" onclick='toggleHotelSelect(${JSON.stringify(h)})'>${icon('x', 12)}</span></div>`).join('')
+    ? form.selectedHotels.map((h, i) => {
+        const far = h.distance_km > form.hotelMaxKm;
+        return `<div class="guest-chip"><span class="avatar" style="width:20px;height:20px;font-size:10px;background:${i === 0 ? 'var(--accent)' : 'var(--info)'};">${i + 1}</span>${h.name}${i === 0 ? ' (หลัก)' : ''} · <span style="${far ? 'color:var(--warning-deep); font-weight:700;' : ''}">${h.distance_km} กม.${far ? ' ' + icon('alert', 11) : ''}</span><span class="x" onclick='toggleHotelSelect(${JSON.stringify(h)})'>${icon('x', 12)}</span></div>`;
+      }).join('')
     : `<span style="font-size:12px; color:var(--ink-faint);">ยังไม่ได้เลือก — แตะที่พักด้านล่างเพื่อเริ่มเลือก (อย่างน้อย 3 ที่)</span>`;
 }
 function renderDistanceMap() {
@@ -463,8 +788,8 @@ function showAddGuestForm() { el('addGuestForm').style.display = 'flex'; }
 function addNewGuest() {
   const name = el('newGuestName').value.trim();
   if (!name) return;
-  form.guests.push({ employee_code: null, name, phone: el('newGuestPhone').value.trim() || null, gender: el('newGuestGender').value });
-  el('newGuestName').value = ''; el('newGuestPhone').value = ''; el('addGuestForm').style.display = 'none';
+  form.guests.push({ employee_code: el('newGuestCode').value.trim() || null, name, gender: el('newGuestGender').value });
+  el('newGuestCode').value = ''; el('newGuestName').value = ''; el('addGuestForm').style.display = 'none';
   renderGuestChips();
 }
 function renderGuestChips() {
@@ -502,6 +827,7 @@ async function submitRequest() {
     hotel_codes: form.selectedHotels.map((h) => h.code),
     far_reason: el('fFarReason').value.trim() || null,
     created_by: session.employee.code, guests: form.guests,
+    schedule_entry_id: form.scheduleEntryId || null,
   };
   try {
     el('submitBtn').disabled = true;
@@ -545,10 +871,15 @@ function detailHtml(r) {
       <div class="person-field"><div><span class="k">เบอร์โทร</span><span class="v">${g.phone || '-'}</span></div><button class="btn btn-sm" onclick='copyText(${JSON.stringify(g.phone || '-')}, this)'>${icon('copy', 14)}</button></div>
     </div>`).join('');
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
-  const hotelListText = r.status === 'done' ? (r.hotel?.name || '-') : candidates.map((h, i) => `${i + 1}. ${h.name}`).join(' / ');
+  const candDist = (h) => (r.branch?.lat != null && h.lat != null ? haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) : null);
+  const hotelListText = r.status === 'done' ? (r.hotel?.name || '-') : candidates.map((h, i) => `${i + 1}. ${h.name} (${candDist(h) ?? '-'} กม.)`).join(' / ');
   const hotelKvValue = r.status === 'done'
     ? (r.hotel?.name || '-')
-    : candidates.map((h, i) => `<div>${i + 1}. ${h.name}${i === 0 ? ' <span style="color:var(--accent-deep); font-weight:700;">(หลัก)</span>' : ''}</div>`).join('');
+    : candidates.map((h, i) => {
+        const d = candDist(h);
+        const far = d != null && r.hotelMaxKm != null && d > r.hotelMaxKm;
+        return `<div>${i + 1}. ${h.name}${i === 0 ? ' <span style="color:var(--accent-deep); font-weight:700;">(หลัก)</span>' : ''}${d != null ? ` · <span style="${far ? 'color:var(--warning-deep); font-weight:700;' : ''}">${d} กม.${far ? ' ' + icon('alert', 12) : ''}</span>` : ''}</div>`;
+      }).join('');
   return `
     <button class="back-link" onclick="showView('${detailCtx.backTarget}')">‹ กลับ</button>
     <div class="page-head"><div><h2>รายละเอียดการจอง</h2><div class="sub">ใช้หน้านี้ก็อบข้อมูลไปกรอกจองในระบบ Choowap${r.status !== 'done' ? ' — ลองจองตามลำดับที่พักด้านล่าง ถ้าที่ 1 เต็มให้ลองที่ 2, 3 ต่อไป' : ''}</div></div><span class="pill ${cls}">${label}</span></div>
@@ -710,11 +1041,16 @@ async function openApproverDetail(id) {
   } else if (r.status === 'rejected') {
     actions = `<div class="note-box danger"><b>ตีกลับแล้ว</b>${r.reject_reason || ''}</div>`;
   }
-  const candidatesHtml = (r.hotelCandidates || []).length > 1 ? `
-    <div class="note-box muted" style="margin:10px 0;"><b>ที่พักที่เลือกไว้ (${r.hotelCandidates.length} อันดับ)</b>${r.hotelCandidates.map((h, i) => `${i + 1}. ${h.name}${i === 0 ? ' (หลัก)' : ''}`).join(' · ')}</div>` : '';
+  const candidatesHtml = (r.status !== 'done' && (r.hotelCandidates || []).length > 1) ? `
+    <div class="note-box muted" style="margin:10px 0;"><b>ที่พักที่เลือกไว้ (${r.hotelCandidates.length} อันดับ)</b>${r.hotelCandidates.map((h, i) => {
+      const d = r.branch?.lat != null && h.lat != null ? haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) : null;
+      const far = d != null && r.hotelMaxKm != null && d > r.hotelMaxKm;
+      return `<div style="margin-top:4px;">${i + 1}. ${h.name}${i === 0 ? ' (หลัก)' : ''}${d != null ? ` · ${d} กม.${far ? ' ' + icon('alert', 12) : ''}` : ''}</div>`;
+    }).join('')}</div>` : '';
+  const hotelHeadLabel = r.status === 'done' ? 'ที่พักที่คอนเฟิมแล้ว' : 'ที่พักอันดับ 1';
   el('approverDetailRoot').innerHTML = `
     <button class="back-link" onclick="closeApproverDetail()">‹ กลับไปคิว</button>
-    <div class="page-head"><div><h2>${r.branch?.name || r.branch_code}</h2><div class="sub">${r.team_code || ''} · ${r.mission_type} · ${r.checkin_date} – ${r.checkout_date} (${r.nights} คืน)</div><div class="sub" style="margin-top:2px;">${icon('hotel', 13)} ที่พักอันดับ 1: <b style="color:var(--ink);">${r.hotel?.name || '-'}</b></div></div></div>
+    <div class="page-head"><div><h2>${r.branch?.name || r.branch_code}</h2><div class="sub">${r.team_code || ''} · ${r.mission_type} · ${r.checkin_date} – ${r.checkout_date} (${r.nights} คืน)</div><div class="sub" style="margin-top:2px;">${icon('hotel', 13)} ${hotelHeadLabel}: <b style="color:var(--ink);">${r.hotel?.name || '-'}</b></div></div></div>
     <div class="trav-top" style="margin:10px 0;">${avatarHtml(r.createdByName, 30)}<div class="info"><h3 style="font-size:12.5px; color:var(--ink-faint); font-weight:600;">ผู้จองให้</h3><div class="sub" style="font-size:13.5px; color:var(--ink); font-weight:600;">${r.createdByName}</div></div></div>
     ${candidatesHtml}
     <div id="apMap" style="height:220px; border-radius:var(--r-lg); overflow:hidden; border:3px solid var(--ink); margin-bottom:10px;"></div>
@@ -909,12 +1245,11 @@ async function loadDashboard() {
   }).join('') || '<tr><td colspan="7" style="padding:20px; text-align:center; color:var(--ink-faint);">ยังไม่มีข้อมูล</td></tr>';
 }
 
-// ===== employee lookup =====
-async function lookupEmployee() {
-  const code = el('empLookupCode').value.trim();
-  if (!code) return;
+// ===== employee: ดูแผนของตัวเอง (auto-load ด้วยรหัสที่ล็อกอินไว้ ไม่ต้องพิมพ์ซ้ำ) =====
+async function loadEmployeeView() {
+  loadEmployeeSchedule();
   try {
-    const data = await api('/api/employee-lookup?code=' + encodeURIComponent(code));
+    const data = await api('/api/employee-lookup?code=' + encodeURIComponent(session.employee.code));
     if (!data.requests.length) { el('empLookupResult').innerHTML = `<p class="empty-hint">คุณ${data.employee.nickname || data.employee.name} ยังไม่มีแผนที่พักในระบบ</p>`; return; }
     el('empLookupResult').innerHTML = `<p style="font-size:13px; color:var(--ink-soft);">สวัสดีคุณ${data.employee.nickname || data.employee.name}</p><div class="req-grid">` +
       data.requests.map((r) => `<div class="trav-card" onclick="openDetail(${r.id}, 'employee-view', true)">
@@ -1028,7 +1363,7 @@ async function saveStaffForm() {
 }
 async function deleteStaffForm() {
   if (!adminStaffEditing) return;
-  if (!confirm('ลบพนักงานคนนี้ออกจากระบบ?')) return;
+  if (!(await confirmDialog('ลบพนักงานคนนี้ออกจากระบบ?'))) return;
   try {
     await api(`/api/admin/staff/${encodeURIComponent(adminStaffEditing.code)}/${encodeURIComponent(adminStaffEditing.category)}?actor=${encodeURIComponent(session.employee.code)}`, { method: 'DELETE' });
     closeStaffForm();
@@ -1068,6 +1403,44 @@ async function uploadAdminFile(kind) {
     if (kind === 'branch') loadAdminBranchSummary(); else loadAdminHotelSummary();
   } catch (e) {
     el(msgId).innerHTML = errBox(e.message);
+  }
+}
+
+async function uploadScheduleFile() {
+  const file = el('adminScheduleFile').files[0];
+  const month = el('adminScheduleMonth').value.trim();
+  if (!month) { el('adminScheduleMsg').innerHTML = errBox('ใส่เดือนของไฟล์ก่อน เช่น 2026-09'); return; }
+  if (!file) { el('adminScheduleMsg').innerHTML = errBox('เลือกไฟล์ก่อน'); return; }
+  el('adminScheduleMsg').textContent = 'กำลังนำเข้า...';
+  const fd = new FormData(); fd.append('file', file); fd.append('source_month', month);
+  try {
+    const r = await fetch('/api/admin/import-schedule?actor=' + encodeURIComponent(session.employee.code), { method: 'POST', body: fd });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(data.error || 'นำเข้าไม่สำเร็จ');
+    el('adminScheduleMsg').innerHTML = `<span style="color:var(--success);">นำเข้าสำเร็จ ${data.count} รายการ${data.skippedUnknownTeam ? ` (ข้าม ${data.skippedUnknownTeam} แถว หาทีมไม่เจอ)` : ''}</span>`;
+    el('adminScheduleFile').value = '';
+  } catch (e) {
+    el('adminScheduleMsg').innerHTML = errBox(e.message);
+  }
+}
+
+async function deleteAllScheduleEntries() {
+  if (!(await confirmDialog('ลบแผนงานทั้งหมดในระบบ? ลบแล้วกู้คืนไม่ได้ ต้องนำเข้าไฟล์ใหม่อีกครั้ง'))) return;
+  try {
+    await api('/api/admin/schedule-entries?actor=' + encodeURIComponent(session.employee.code), { method: 'DELETE' });
+    alertDialog('ลบแผนงานทั้งหมดแล้ว');
+  } catch (e) {
+    alertDialog(e.message);
+  }
+}
+async function deleteAllRequests() {
+  if (!(await confirmDialog('ลบคำขอจองทั้งหมดในระบบ (รวมผู้เข้าพักทุกคน)? ลบแล้วกู้คืนไม่ได้'))) return;
+  el('adminDeleteRequestsMsg').textContent = 'กำลังลบ...';
+  try {
+    await api('/api/admin/requests-all?actor=' + encodeURIComponent(session.employee.code), { method: 'DELETE' });
+    el('adminDeleteRequestsMsg').innerHTML = '<span style="color:var(--success);">ลบคำขอจองทั้งหมดแล้ว</span>';
+  } catch (e) {
+    el('adminDeleteRequestsMsg').innerHTML = errBox(e.message);
   }
 }
 

@@ -6,6 +6,8 @@ const XLSX = require('xlsx');
 const { supabase } = require('./lib/supabase');
 const ref = require('./lib/reference-data');
 const { haversineKm, roomsNeeded } = require('./lib/geo');
+const { parseScheduleCsv } = require('./lib/schedule-import');
+const { notifyEmployee } = require('./lib/line-notify');
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
@@ -13,7 +15,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 const MISSION_TYPES = {
-  activity: ['งานแฟร์', 'งานเปิดสาขาใหม่', 'ประชุม', 'สำรวจพื้นที่'],
+  activity: ['งานแฟร์', 'งานเปิดสาขาใหม่', 'ประชุม', 'สำรวจพื้นที่', 'ปิดเป้า', 'แฟร์ย้ำ1', 'แฟร์ย้ำ2', 'แฟร์200K', 'เปิดสาขาใหม่'],
   setup: ['แฟร์ย้ำ', 'รีโนเวท', 'เซ็ทร้าน', 'ช่วยงานแกรนด์'],
 };
 // เกณฑ์ระยะทาง: จุดรวมพล->สาขา ต้อง "เกิน" ค่านี้ถึงจะจองที่พักได้ / สาขา->ที่พัก ต้อง "ไม่เกิน" ค่านี้ ถ้าเกินต้องมีเหตุผล
@@ -135,6 +137,26 @@ app.get('/api/mission-types', (req, res) => {
 // area (ชื่อเล่นไม่มีคำนำหน้า เช่น "พี่อิ๋ม" -> "อิ๋ม") ใช้จับคู่กับคอลัมน์ area_owner ที่ซิงค์มาจากชีต HR
 function bareNickname(nickname) { return String(nickname || '').replace(/^(พี่|คุณ|นาย|นาง|นางสาว)/, '').trim(); }
 
+// ทีมที่ผู้จอง (Area) คนนี้มีสิทธิ์จองให้ได้ (ทีมที่ตัวเองดูแล + ทีมตัวเอง) — คืน null ถ้าไม่ใช่ผู้จอง (ไม่จำกัดทีม)
+function getOwnedTeams(actorCode, category) {
+  const staff = ref.getStaff();
+  const actorRow = staff.find((s) => s.code === actorCode && s.category === category);
+  if (!actorRow || actorRow.role !== 'ผู้จอง') return null;
+  const actorNick = bareNickname(actorRow.nickname);
+  const ownedTeams = new Set(staff.filter((s) => s.category === category && s.area_owner && bareNickname(s.area_owner) === actorNick).map((s) => s.team_code));
+  if (actorRow.team_code) ownedTeams.add(actorRow.team_code);
+  return ownedTeams;
+}
+
+// หาว่า "ทีมนี้" มีผู้จอง (Area) คนไหนดูแลอยู่ — อ่านจาก area_owner ที่ติดไว้กับทีมนั้น แล้วหาเจ้าของชื่อเล่นนั้น
+function findAreaOwnerFor(teamCode, category) {
+  const staff = ref.getStaff().filter((s) => s.category === category);
+  const teamRow = staff.find((s) => s.team_code === teamCode && s.area_owner);
+  if (!teamRow) return null;
+  const ownerNick = bareNickname(teamRow.area_owner);
+  return staff.find((s) => s.role === 'ผู้จอง' && bareNickname(s.nickname) === ownerNick) || null;
+}
+
 app.get('/api/teams', (req, res) => {
   const category = String(req.query.category || '');
   const actor = String(req.query.actor || '').trim();
@@ -182,17 +204,207 @@ app.get('/api/muster-check', (req, res) => {
 app.get('/api/hotels-near', (req, res) => {
   const branch = findBranch(String(req.query.branch || ''));
   if (!branch) return res.status(404).json({ error: 'ไม่พบสาขานี้' });
+  // ทีมย่อย: แยกไป 2 สาขาพร้อมกัน แต่พักที่เดียวกัน — จัดอันดับที่พักด้วยระยะทางรวมของทั้ง 2 สาขา (น้อยสุด = ดีสุด)
+  const branch2 = req.query.branch2 ? findBranch(String(req.query.branch2)) : null;
   const rule = RULES[req.query.category] || RULES.activity;
   const withDist = ref.getHotels()
-    .map((h) => ({ ...h, distance_km: haversineKm(branch.lat, branch.lng, h.lat, h.lng) }))
+    .map((h) => {
+      const distA = haversineKm(branch.lat, branch.lng, h.lat, h.lng);
+      const distB = branch2 ? haversineKm(branch2.lat, branch2.lng, h.lat, h.lng) : null;
+      const distance_km = branch2 ? (distA != null && distB != null ? Math.round((distA + distB) * 10) / 10 : null) : distA;
+      return { ...h, distance_km, distance_km_a: distA, distance_km_b: distB };
+    })
     .filter((h) => h.distance_km != null)
     .sort((a, b) => a.distance_km - b.distance_km);
+  const isFar = branch2
+    ? (h) => h.distance_km_a > rule.hotelMaxKm || h.distance_km_b > rule.hotelMaxKm
+    : (h) => h.distance_km > rule.hotelMaxKm;
   res.json({
-    branch,
-    near: withDist.filter((h) => h.distance_km <= rule.hotelMaxKm).slice(0, 20),
-    far: withDist.filter((h) => h.distance_km > rule.hotelMaxKm).slice(0, 15),
+    branch, branch2: branch2 || null,
+    near: withDist.filter((h) => !isFar(h)).slice(0, 20),
+    far: withDist.filter((h) => isFar(h)).slice(0, 15),
     hotelMaxKm: rule.hotelMaxKm,
   });
+});
+
+// รายการ "แผนงานที่ต้องจอง" นำเข้าจาก NSA — กรองด้วยทีมที่ผู้จองคนนี้ดูแล เหมือนหน้าจองปกติ
+app.get('/api/schedule-to-book', async (req, res) => {
+  const actor = String(req.query.actor || '').trim();
+  const { data, error } = await supabase.from('approval_schedule_entries').select('*').is('matched_request_id', null).order('suggested_checkin', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  let rows = data;
+  const ownedTeams = getOwnedTeams(actor, 'activity');
+  if (ownedTeams) rows = rows.filter((r) => ownedTeams.has(r.team_code));
+
+  const byGroup = new Map();
+  for (const r of rows) { const arr = byGroup.get(r.group_key) || []; arr.push(r); byGroup.set(r.group_key, arr); }
+
+  const items = rows.map((r) => {
+    const pairedRow = (byGroup.get(r.group_key) || []).find((s) => s.id !== r.id);
+    return {
+      id: r.id, team_code: r.team_code, row_type: r.row_type, mission_type: r.mission_type,
+      branch: findBranch(r.branch_code) || null,
+      paired_branch: pairedRow ? findBranch(pairedRow.branch_code) || null : null,
+      suggested_checkin: r.suggested_checkin, suggested_checkout: r.suggested_checkout,
+    };
+  });
+  res.json({ items });
+});
+
+// ผู้อนุมัติเห็นแผนงานทั้งหมด (จองแล้ว/ยังไม่จอง) พร้อมกดเตือนผู้จองที่รับผิดชอบทีมนั้นได้
+app.get('/api/schedule-all', async (req, res) => {
+  const category = String(req.query.category || 'activity');
+  const { data, error } = await supabase.from('approval_schedule_entries').select('*').eq('team_category', category).order('suggested_checkin', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  const byGroup = new Map();
+  for (const r of data) { const arr = byGroup.get(r.group_key) || []; arr.push(r); byGroup.set(r.group_key, arr); }
+  const requestIds = [...new Set(data.map((r) => r.matched_request_id).filter(Boolean))];
+  let requestsById = new Map();
+  if (requestIds.length) {
+    const { data: reqs } = await supabase.from('approval_requests').select('id,status,hotel_name,confirmation_no').in('id', requestIds);
+    requestsById = new Map((reqs || []).map((r) => [r.id, r]));
+  }
+  const items = data.map((r) => {
+    const pairedRow = (byGroup.get(r.group_key) || []).find((s) => s.id !== r.id);
+    const areaOwner = findAreaOwnerFor(r.team_code, category);
+    const matched = r.matched_request_id ? requestsById.get(r.matched_request_id) : null;
+    return {
+      id: r.id, team_code: r.team_code, row_type: r.row_type, mission_type: r.mission_type,
+      branch: findBranch(r.branch_code) || null,
+      paired_branch: pairedRow ? findBranch(pairedRow.branch_code) || null : null,
+      suggested_checkin: r.suggested_checkin, suggested_checkout: r.suggested_checkout,
+      area_owner: areaOwner ? { code: areaOwner.code, nickname: areaOwner.nickname } : null,
+      matched: matched ? { status: matched.status, hotel_name: matched.hotel_name, confirmation_no: matched.confirmation_no } : null,
+    };
+  });
+  res.json({ items });
+});
+
+// พนักงานดูแผนงานของทีมตัวเอง — อันไหนจองแล้วพักที่ไหน อันไหนยังไม่จอง
+app.get('/api/schedule-mine', async (req, res) => {
+  const code = String(req.query.code || '').trim();
+  const staffRow = ref.getStaff().find((s) => s.code === code);
+  if (!staffRow || !staffRow.team_code) return res.json({ items: [] });
+  const { data, error } = await supabase.from('approval_schedule_entries').select('*').eq('team_code', staffRow.team_code).eq('team_category', staffRow.category).order('suggested_checkin', { ascending: true });
+  if (error) return res.status(500).json({ error: error.message });
+  const byGroup = new Map();
+  for (const r of data) { const arr = byGroup.get(r.group_key) || []; arr.push(r); byGroup.set(r.group_key, arr); }
+  const requestIds = [...new Set(data.map((r) => r.matched_request_id).filter(Boolean))];
+  let requestsById = new Map();
+  if (requestIds.length) {
+    const { data: reqs } = await supabase.from('approval_requests').select('id,status,hotel_name,confirmation_no').in('id', requestIds);
+    requestsById = new Map((reqs || []).map((r) => [r.id, r]));
+  }
+  const items = data.map((r) => {
+    const pairedRow = (byGroup.get(r.group_key) || []).find((s) => s.id !== r.id);
+    const matched = r.matched_request_id ? requestsById.get(r.matched_request_id) : null;
+    return {
+      id: r.id, row_type: r.row_type, mission_type: r.mission_type,
+      branch: findBranch(r.branch_code) || null,
+      paired_branch: pairedRow ? findBranch(pairedRow.branch_code) || null : null,
+      suggested_checkin: r.suggested_checkin, suggested_checkout: r.suggested_checkout,
+      matched: matched ? { status: matched.status, hotel_name: matched.hotel_name, confirmation_no: matched.confirmation_no } : null,
+    };
+  });
+  res.json({ items });
+});
+
+app.delete('/api/schedule-entries/:id', requireApprover, async (req, res) => {
+  const { error } = await supabase.from('approval_schedule_entries').delete().eq('id', req.params.id);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/schedule-entries', requireApprover, async (req, res) => {
+  const { error } = await supabase.from('approval_schedule_entries').delete().neq('id', 0);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+// ลบคำขอจองทั้งหมดในระบบ (สำหรับล้างข้อมูลทดลองเล่นก่อนใช้งานจริง) — guests โดน cascade ลบตามอัตโนมัติ
+// แผนงานที่เคยผูกกับคำขอเหล่านี้จะกลับไปเป็น "ยังไม่จอง" (matched_request_id เป็น null อัตโนมัติ)
+app.delete('/api/admin/requests-all', requireApprover, async (req, res) => {
+  const { error } = await supabase.from('approval_requests').delete().neq('id', 0);
+  if (error) return res.status(500).json({ error: error.message });
+  res.json({ ok: true });
+});
+
+app.post('/api/schedule-entries/:id/remind', requireApprover, async (req, res) => {
+  const { data: entry } = await supabase.from('approval_schedule_entries').select('*').eq('id', req.params.id).maybeSingle();
+  if (!entry) return res.status(404).json({ error: 'ไม่พบรายการนี้' });
+  const areaOwner = findAreaOwnerFor(entry.team_code, entry.team_category);
+  if (!areaOwner) return res.status(400).json({ error: 'หาผู้รับผิดชอบทีมนี้ไม่เจอ (ยังไม่ได้ตั้ง Area ที่ดูแลทีมนี้)' });
+  const branch = findBranch(entry.branch_code);
+  const text = `🔔 เตือนจองที่พัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nรบกวนเข้าไปจองในระบบด้วยนะครับ/ค่ะ`;
+  const result = await notifyEmployee(areaOwner.code, text);
+  res.json({ ok: true, sent: result.sent, reason: result.reason || null });
+});
+
+// เตือนอัตโนมัติทุกวัน: แผนงานที่ยังไม่จอง และเหลืออีก 3 วันจะถึงวันเข้าพัก
+async function checkUpcomingScheduleReminders() {
+  try {
+    const target = new Date();
+    target.setUTCDate(target.getUTCDate() + 3);
+    const targetDate = target.toISOString().slice(0, 10);
+    const { data, error } = await supabase.from('approval_schedule_entries').select('*').is('matched_request_id', null).is('reminder_sent_at', null).eq('suggested_checkin', targetDate);
+    if (error) throw new Error(error.message);
+    for (const entry of data || []) {
+      const areaOwner = findAreaOwnerFor(entry.team_code, entry.team_category);
+      if (!areaOwner) continue;
+      const branch = findBranch(entry.branch_code);
+      const text = `🔔 เตือนอัตโนมัติ: อีก 3 วันถึงวันเข้าพัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nรีบเข้าไปจองที่พักในระบบด้วยนะครับ/ค่ะ`;
+      const result = await notifyEmployee(areaOwner.code, text);
+      if (result.sent) await supabase.from('approval_schedule_entries').update({ reminder_sent_at: new Date().toISOString() }).eq('id', entry.id);
+    }
+  } catch (err) { console.error('[schedule-reminder] เช็คแจ้งเตือน 3 วันก่อนเข้าพักล้มเหลว:', err.message); }
+}
+setInterval(checkUpcomingScheduleReminders, 24 * 60 * 60 * 1000).unref();
+checkUpcomingScheduleReminders();
+
+// ---------- ที่พัก: ค้นหา + ประวัติเคยเข้าพัก + รีวิว (เปิดให้ทุกบทบาทดู/เขียนได้) ----------
+app.get('/api/hotels', (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  let rows = ref.getHotels();
+  if (q) rows = rows.filter((h) => h.name.toLowerCase().includes(q) || (h.province || '').toLowerCase().includes(q));
+  res.json({ hotels: rows.slice(0, 40) });
+});
+
+app.get('/api/hotel-reviews', async (req, res) => {
+  const hotelCode = String(req.query.hotel_code || '');
+  if (!hotelCode) return res.status(400).json({ error: 'ต้องระบุที่พัก' });
+  const { data, error } = await supabase.from('approval_hotel_reviews').select('*').eq('hotel_code', hotelCode).order('created_at', { ascending: false });
+  if (error) return res.status(500).json({ error: error.message });
+  const count = data.length;
+  const avg = count ? Math.round((data.reduce((s, r) => s + r.rating, 0) / count) * 10) / 10 : null;
+  res.json({ reviews: data, avg, count });
+});
+
+app.post('/api/hotel-reviews', upload.array('photos', 6), async (req, res) => {
+  const { hotel_code, actor, rating, review_text } = req.body;
+  if (!hotel_code) return res.status(400).json({ error: 'ต้องระบุที่พัก' });
+  if (!actor) return res.status(400).json({ error: 'ไม่พบรหัสพนักงาน (session หมดอายุ?)' });
+  const ratingNum = Number(rating);
+  if (!ratingNum || ratingNum < 1 || ratingNum > 5) return res.status(400).json({ error: 'ต้องให้คะแนน 1-5 ดาว' });
+  const hotel = findHotel(hotel_code);
+  if (!hotel) return res.status(404).json({ error: 'ไม่พบที่พักนี้' });
+  const reviewer = ref.getStaff().find((s) => s.code === actor);
+
+  const photoUrls = [];
+  for (const file of req.files || []) {
+    const ext = (file.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+    const storagePath = `${hotel_code}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const { error: upErr } = await supabase.storage.from('hotel-review-photos').upload(storagePath, file.buffer, { contentType: file.mimetype });
+    if (upErr) return res.status(500).json({ error: 'อัพโหลดรูปไม่สำเร็จ: ' + upErr.message });
+    const { data: pub } = supabase.storage.from('hotel-review-photos').getPublicUrl(storagePath);
+    photoUrls.push(pub.publicUrl);
+  }
+
+  const { data: inserted, error: insErr } = await supabase.from('approval_hotel_reviews').insert({
+    hotel_code, employee_code: actor, employee_name: reviewer ? (reviewer.nickname || reviewer.name) : actor,
+    rating: ratingNum, review_text: review_text || null, photo_urls: photoUrls,
+  }).select().single();
+  if (insErr) return res.status(500).json({ error: 'บันทึกรีวิวไม่สำเร็จ: ' + insErr.message });
+  res.status(201).json({ review: inserted });
 });
 
 function datesOverlap(aStart, aEnd, bStart, bEnd) {
@@ -281,6 +493,7 @@ async function serializeRequest(r) {
     branch: { code: r.branch_code, name: r.branch_name, province: r.branch_province, lat: r.branch_lat, lng: r.branch_lng },
     hotel: r.hotel_code ? { code: r.hotel_code, name: r.hotel_name, price_per_night: r.hotel_price_per_night, map_link: r.hotel_map_link, lat: r.hotel_lat, lng: r.hotel_lng } : null,
     hotelCandidates: r.hotel_candidates || [],
+    hotelMaxKm: RULES[r.team_category]?.hotelMaxKm ?? null,
     muster: r.muster_name ? { name: r.muster_name, lat: r.muster_lat, lng: r.muster_lng } : null,
     branchHotelKm, musterBranchKm, totalKm,
     nights,
@@ -342,10 +555,12 @@ app.post('/api/requests', async (req, res) => {
     }
   }
 
-  if (rule && branch && hotel) {
-    const dist = haversineKm(branch.lat, branch.lng, hotel.lat, hotel.lng);
-    if (dist != null && dist > rule.hotelMaxKm && !String(b.far_reason || '').trim()) {
-      errors.push(`ที่พักนี้ห่างสาขา ${dist} กม. (เกิน ${rule.hotelMaxKm} กม.) ต้องระบุเหตุผลกำกับ`);
+  if (rule && branch && hotelCandidates.length) {
+    const farOnes = hotelCandidates
+      .map((h) => ({ h, dist: haversineKm(branch.lat, branch.lng, h.lat, h.lng) }))
+      .filter((x) => x.dist != null && x.dist > rule.hotelMaxKm);
+    if (farOnes.length && !String(b.far_reason || '').trim()) {
+      errors.push(`ที่พักที่เลือก ${farOnes.length} อันดับห่างสาขาเกิน ${rule.hotelMaxKm} กม. (${farOnes.map((x) => `${x.h.name} ${x.dist} กม.`).join(', ')}) ต้องระบุเหตุผลกำกับ`);
     }
   }
 
@@ -364,7 +579,7 @@ app.post('/api/requests', async (req, res) => {
 
   if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
 
-  const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link }));
+  const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link, stay_count: h.stay_count || 0 }));
   const { data: inserted, error: insErr } = await supabase.from('approval_requests').insert({
     team_category: b.team_category,
     mission_type: b.mission_type,
@@ -379,6 +594,15 @@ app.post('/api/requests', async (req, res) => {
     created_by: b.created_by,
   }).select().single();
   if (insErr) return res.status(500).json({ error: 'บันทึกคำขอไม่สำเร็จ: ' + insErr.message });
+
+  if (b.schedule_entry_id) {
+    await supabase.from('approval_schedule_entries').update({ matched_request_id: inserted.id }).eq('id', b.schedule_entry_id);
+  }
+
+  const approverRow = ref.getStaff().find((s) => s.category === b.team_category && s.role === 'ผู้อนุมัติ');
+  if (approverRow) {
+    notifyEmployee(approverRow.code, `📋 มีคำขอจองใหม่รออนุมัติ\nทีม ${b.team_code} · ${branch.name}\n${b.checkin_date} – ${b.checkout_date}`).catch((err) => console.error('[line-notify] แจ้งผู้อนุมัติไม่สำเร็จ:', err.message));
+  }
 
   const guestRows = b.guests.map((g) => ({ request_id: inserted.id, employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null }));
   const { error: guestErr } = await supabase.from('approval_request_guests').insert(guestRows);
@@ -458,6 +682,59 @@ app.patch('/api/requests/:id', async (req, res) => {
 
   const { error: updErr } = await supabase.from('approval_requests').update(update).eq('id', id);
   if (updErr) return res.status(500).json({ error: updErr.message });
+  const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
+  res.json({ request: await serializeRequest(full) });
+});
+
+// รายการจองที่ "สำเร็จ" แล้วและยังไม่เช็คเอาท์ ที่มีห้องว่างเหลือ (เศษเพศเดียวกัน) — กดเพิ่มผู้เข้าพักเข้าไปในห้องที่มีอยู่แล้วได้เลย ไม่ต้องจองใหม่
+// หมายเหตุ: ตั้งชื่อ path แยกจาก /api/requests/:id เพราะถ้าใช้ /api/requests/vacancies express จะจับ "vacancies" เป็น :id ก่อน (ชนกับ route ที่ประกาศไว้ก่อนหน้านี้)
+app.get('/api/vacancies', async (req, res) => {
+  const { category } = req.query;
+  const today = new Date().toISOString().slice(0, 10);
+  let query = supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('status', 'done').gte('checkout_date', today);
+  if (category) query = query.eq('team_category', category);
+  const { data, error } = await query;
+  if (error) return res.status(500).json({ error: error.message });
+  const reqs = await Promise.all(data.map(serializeRequest));
+  const vacancies = reqs.map((r) => {
+    const male = r.guests.filter((g) => g.gender === 'M').length;
+    const female = r.guests.filter((g) => g.gender === 'F').length;
+    const spareGender = male % 2 === 1 ? 'M' : female % 2 === 1 ? 'F' : null;
+    const inStay = r.checkin_date <= today;
+    return spareGender ? { ...r, spareGender, maleCount: male, femaleCount: female, inStay } : null;
+  }).filter(Boolean);
+  vacancies.sort((a, b) => new Date(a.checkin_date) - new Date(b.checkin_date));
+  res.json({ vacancies });
+});
+
+// เพิ่มผู้เข้าพักเข้าไปในคำขอที่ "สำเร็จ" แล้ว (จองที่พักไว้แล้ว มีห้องว่างเหลือ) — ไม่ต้องขออนุมัติใหม่ เพราะที่พัก/วันที่/ทีมเดิมไม่เปลี่ยน
+app.post('/api/requests/:id/add-guests', async (req, res) => {
+  const id = req.params.id;
+  const { actor, guests } = req.body;
+  if (!Array.isArray(guests) || !guests.length) return res.status(400).json({ error: 'ต้องระบุผู้เข้าพักที่จะเพิ่มอย่างน้อย 1 คน' });
+  const { data: r } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).maybeSingle();
+  if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
+  if (r.status !== 'done') return res.status(400).json({ error: 'เพิ่มผู้เข้าพักได้เฉพาะรายการที่จองสำเร็จแล้วเท่านั้น' });
+
+  const existingCodes = new Set((r.approval_request_guests || []).map((g) => g.employee_code).filter(Boolean));
+  const errors = [];
+  try {
+    const openMap = await getOpenBookingsMap();
+    for (const g of guests) {
+      if (!g.name) { errors.push('ต้องระบุชื่อผู้เข้าพัก'); continue; }
+      if (g.employee_code) {
+        if (existingCodes.has(g.employee_code)) { errors.push(`${g.name} อยู่ในรายการนี้อยู่แล้ว`); continue; }
+        const conflict = await getOpenBookingConflict(openMap, g.employee_code, r.checkin_date, r.checkout_date);
+        if (conflict) errors.push(`${g.name} มีแผนจองอยู่แล้ว (${conflict.branch} ${conflict.dates}) ซึ่งวันที่ชนกัน ไม่สามารถเพิ่มซ้ำได้`);
+      }
+    }
+  } catch (err) { errors.push('ตรวจสอบการจองซ้ำไม่สำเร็จ: ' + err.message); }
+  if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
+
+  const guestRows = guests.map((g) => ({ request_id: Number(id), employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null }));
+  const { error: insErr } = await supabase.from('approval_request_guests').insert(guestRows);
+  if (insErr) return res.status(500).json({ error: 'เพิ่มผู้เข้าพักไม่สำเร็จ: ' + insErr.message });
+
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
   res.json({ request: await serializeRequest(full) });
 });
@@ -638,6 +915,27 @@ app.post('/api/admin/import-hotels', upload.single('file'), requireApprover, asy
   }
   await ref.forceRefresh();
   res.json({ ok: true, count: hotels.length });
+});
+
+app.post('/api/admin/import-schedule', upload.single('file'), requireApprover, async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'ไม่พบไฟล์ที่อัพโหลด' });
+  const sourceMonth = String(req.body.source_month || '').trim();
+  if (!sourceMonth) return res.status(400).json({ error: 'ต้องระบุเดือนของไฟล์นี้ (เช่น 2026-09)' });
+  let entries, skippedUnknownTeam;
+  try {
+    ({ entries, skippedUnknownTeam } = parseScheduleCsv(req.file.buffer.toString('utf8'), sourceMonth));
+  } catch (err) { return res.status(400).json({ error: 'อ่านไฟล์ไม่สำเร็จ: ' + err.message }); }
+  if (!entries.length) return res.status(400).json({ error: 'ไม่พบข้อมูลแผนงานในไฟล์นี้ (ตรวจรูปแบบคอลัมน์)' });
+
+  // ลบของเดิมเฉพาะเดือนนี้ที่ "ยังไม่ได้จอง" ก่อนนำเข้าใหม่ — อันที่จองไปแล้วเก็บไว้เหมือนเดิม ไม่ลบทิ้ง
+  const { error: delErr } = await supabase.from('approval_schedule_entries').delete().eq('source_month', sourceMonth).is('matched_request_id', null);
+  if (delErr) return res.status(500).json({ error: 'ลบข้อมูลเดิมไม่สำเร็จ: ' + delErr.message });
+
+  for (let i = 0; i < entries.length; i += 500) {
+    const { error } = await supabase.from('approval_schedule_entries').upsert(entries.slice(i, i + 500), { onConflict: 'team_code,group_key,branch_code' });
+    if (error) return res.status(500).json({ error: `นำเข้าไม่สำเร็จที่แถว ${i}: ${error.message}` });
+  }
+  res.json({ ok: true, count: entries.length, skippedUnknownTeam });
 });
 
 const PORT = process.env.PORT || 4310;

@@ -168,11 +168,11 @@
 
           <button class="btn btn-ghost btn-sm" style="align-self:flex-start;" onclick="showAddGuestForm()">+ เพิ่มรายชื่อใหม่เข้าระบบ</button>
           <div id="addGuestForm" class="add-guest-form" style="display:none;">
-            <input type="text" id="newGuestName" placeholder="ชื่อ-นามสกุล">
             <div class="field-row">
-              <input type="text" id="newGuestPhone" placeholder="เบอร์โทร (ถ้ามี)">
-              <select id="newGuestGender"><option value="M">ชาย</option><option value="F">หญิง</option></select>
+              <input type="text" id="newGuestCode" placeholder="รหัสพนักงาน">
+              <input type="text" id="newGuestName" placeholder="ชื่อ-นามสกุล">
             </div>
+            <select id="newGuestGender"><option value="M">ชาย</option><option value="F">หญิง</option></select>
             <button class="btn btn-sm" onclick="addNewGuest()">เพิ่มรายชื่อนี้</button>
           </div>
         </div>
@@ -180,6 +180,66 @@
         <div class="sticky-foot" style="flex-direction:column;">
           <button class="btn btn-primary btn-block" onclick="submitRequest()" id="submitBtn">ส่งขออนุมัติ →</button>
         </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="booker-vacancy">
+      <div class="col-wide">
+        <button class="back-link" onclick="showView('booker-home')">‹ กลับไปแผนของฉัน</button>
+        <div class="page-head"><div><h2>ห้องว่าง</h2><div class="sub">รายการที่จองสำเร็จแล้วและยังมีห้องว่างเหลือ (เศษเพศเดียวกัน) — กดเพิ่มผู้เข้าพักเข้าห้องเดิมได้เลย ไม่ต้องสร้างคำขอใหม่</div></div></div>
+        <div id="vacancyList"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="schedule-to-book">
+      <div class="col-wide">
+        <div class="page-head"><div><h2>แผนงานที่ต้องจอง</h2><div class="sub">แผนงานของทีมที่คุณดูแล — กด "จองเลย" แล้วเลือกที่พัก ใส่ผู้เข้าพัก ปรับวันที่ (ถ้าต้องการ) แล้วส่งขออนุมัติได้เลย</div></div></div>
+        <div id="scheduleToBookList"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="add-guest">
+      <div class="col">
+        <button class="back-link" onclick="showView('booker-vacancy')">‹ กลับไปห้องว่าง</button>
+        <div class="page-head"><div><h2>เพิ่มผู้เข้าพัก</h2><div class="sub" id="addGuestSubtitle"></div></div></div>
+        <div id="addGuestError"></div>
+        <div class="card step">
+          <span class="field-label">ค้นหาชื่อหรือทีม (เพิ่มได้จากทุกทีม)</span>
+          <div class="combo">
+            <div class="combo-input"><input type="text" id="addGuestSearch" autocomplete="off" placeholder="พิมพ์ชื่อ หรือชื่อทีม" oninput="searchAddGuest(this.value)" onfocus="searchAddGuest(this.value)"></div>
+            <div class="combo-list" id="addGuestAcList" style="display:none;"></div>
+          </div>
+          <div class="guest-chip-row" id="addGuestChipRow"></div>
+          <button class="btn btn-ghost btn-sm" style="align-self:flex-start;" onclick="showAddGuestNewForm()">+ เพิ่มรายชื่อใหม่เข้าระบบ</button>
+          <div id="addGuestNewForm" class="add-guest-form" style="display:none;">
+            <div class="field-row">
+              <input type="text" id="addGuestNewCode" placeholder="รหัสพนักงาน">
+              <input type="text" id="addGuestNewName" placeholder="ชื่อ-นามสกุล">
+            </div>
+            <select id="addGuestNewGender"><option value="M">ชาย</option><option value="F">หญิง</option></select>
+            <button class="btn btn-sm" onclick="addNewAddGuest()">เพิ่มรายชื่อนี้</button>
+          </div>
+        </div>
+        <div class="sticky-foot">
+          <button class="btn btn-primary btn-block" id="addGuestSubmitBtn" onclick="submitAddGuests()">ยืนยันเพิ่มผู้เข้าพัก</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="hotel-reviews">
+      <div class="col-wide">
+        <div class="page-head"><div><h2>รีวิวที่พัก</h2><div class="sub">ค้นหาที่พักเพื่อดูรีวิวจากเพื่อนพนักงาน หรือให้คะแนน/รีวิวที่พักที่เคยไปพัก</div></div></div>
+        <div class="combo">
+          <div class="combo-input"><input type="text" id="hotelReviewSearch" autocomplete="off" placeholder="พิมพ์ชื่อที่พัก หรือจังหวัด" oninput="searchHotelReviewList(this.value)"></div>
+        </div>
+        <div id="hotelReviewList" style="margin-top:14px;"></div>
+      </div>
+    </div>
+
+    <div class="view" data-view="hotel-review-detail">
+      <div class="col">
+        <button class="back-link" onclick="closeHotelReviewDetail()">‹ กลับ</button>
+        <div id="hotelReviewDetailRoot"></div>
       </div>
     </div>
 
@@ -202,6 +262,13 @@
         <div class="view" data-view="approver-detail-panel">
           <div id="approverDetailRoot"><p class="empty-hint" style="padding:60px 20px;">เลือกคำขอทางซ้ายเพื่อดูรายละเอียด</p></div>
         </div>
+      </div>
+    </div>
+
+    <div class="view" data-view="schedule-all">
+      <div class="col-wide">
+        <div class="page-head"><div><h2>แผนงานทั้งหมด</h2><div class="sub">ทุกทีม ทุกสาขา — กด "เตือน" ให้ผู้จองที่รับผิดชอบมาจองรายการที่ยังไม่จอง</div></div></div>
+        <div id="scheduleAllList"></div>
       </div>
     </div>
 
@@ -308,20 +375,55 @@
           </div>
           <div id="adminHotelSummary" class="sub" style="margin-top:6px;"></div>
         </div>
+
+        <div class="card step">
+          <div class="step-head">แผนงาน (นำเข้าจากระบบ NSA)</div>
+          <p class="sub" style="margin:0 0 8px;">อัพโหลดไฟล์ CSV ที่ export จากระบบแผนงาน NSA (คอลัมน์: ประเภทแถว/รหัสสาขา/ชื่อสาขา/ประเภทแฟร์/ทีม/.../วันเริ่ม PR/วันเริ่ม-จบกิจกรรม) — รายการที่จองไปแล้วจะไม่ถูกลบแม้อัพโหลดซ้ำ</p>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap;">
+            <input type="text" id="adminScheduleMonth" placeholder="เดือนของไฟล์ เช่น 2026-09" style="max-width:160px;">
+            <input type="file" id="adminScheduleFile" accept=".csv">
+            <button class="btn btn-primary btn-sm" onclick="uploadScheduleFile()">นำเข้าไฟล์นี้</button>
+            <span id="adminScheduleMsg" style="font-size:12.5px;"></span>
+          </div>
+          <div style="margin-top:10px;">
+            <button class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="deleteAllScheduleEntries()">ลบแผนงานทั้งหมดในระบบ</button>
+          </div>
+        </div>
+
+        <div class="card step">
+          <div class="step-head" style="color:var(--danger);">ล้างข้อมูลทดลอง</div>
+          <p class="sub" style="margin:0 0 8px;">ลบคำขอจองทั้งหมดในระบบ (รวมผู้เข้าพัก) — ใช้ตอนทดลองเล่นเสร็จแล้วอยากเริ่มนับหนึ่งใหม่ก่อนใช้งานจริง ที่พัก/สาขา/พนักงาน/แผนงานไม่โดนลบ</p>
+          <button class="btn btn-danger btn-sm" onclick="deleteAllRequests()">ลบคำขอจองทั้งหมด</button>
+          <span id="adminDeleteRequestsMsg" style="font-size:12.5px; margin-left:8px;"></span>
+        </div>
       </div>
     </div>
 
     <div class="view" data-view="employee-view">
       <div class="col">
-        <div class="page-head"><div><h2>ค้นหาแผนของพนักงาน</h2><div class="sub">ใส่รหัสพนักงานเพื่อดูแผนของตัวเอง</div></div></div>
-        <div style="display:flex; gap:8px;">
-          <input type="text" id="empLookupCode" placeholder="รหัสพนักงาน">
-          <button class="btn btn-primary" onclick="lookupEmployee()">ค้นหา</button>
-        </div>
+        <div class="page-head"><div><h2>แผนงานทีมฉัน</h2><div class="sub">อันไหนจองแล้วพักที่ไหน อันไหนยังไม่จอง</div></div></div>
+        <div id="empScheduleResult" style="margin-bottom:22px;"></div>
+        <div class="section-title" style="margin-bottom:10px; display:block;">แผนที่พักที่มีชื่อคุณอยู่ด้วย</div>
         <div id="empLookupResult"></div>
       </div>
     </div>
 
+  </div>
+
+  <div id="confirmModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="max-width:360px; width:100%;">
+      <p id="confirmModalMsg" style="margin:0 0 16px; font-weight:600;"></p>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" style="flex:1;" id="confirmModalCancel">ยกเลิก</button>
+        <button class="btn btn-danger" style="flex:1;" id="confirmModalOk">ยืนยัน</button>
+      </div>
+    </div>
+  </div>
+  <div id="alertModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="max-width:360px; width:100%;">
+      <p id="alertModalMsg" style="margin:0 0 16px; font-weight:600;"></p>
+      <button class="btn btn-primary btn-block" id="alertModalOk">ตกลง</button>
+    </div>
   </div>
 </div>
 <script src="/app.js"></script>
