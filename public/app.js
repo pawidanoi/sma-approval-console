@@ -166,7 +166,7 @@ function selectRole(role, category) {
   el('whoAv').outerHTML = avatarHtml(emp.nickname || emp.name, 32, emp.gender).replace('class="avatar"', 'class="avatar" id="whoAv"');
   el('whoName').textContent = emp.nickname || emp.name;
   el('whoRole').textContent = role === 'approver' ? 'ผู้อนุมัติ · ' + CATEGORY_LABEL[category] : role === 'booker' ? 'ผู้จอง' : 'พนักงาน';
-  const tabs = { booker: [['booker-home', 'แผนของฉัน'], ['schedule-to-book', 'แผนงานที่ต้องจอง'], ['booker-form', 'สร้างคำขอจอง'], ['booker-vacancy', 'ห้องว่าง'], ['hotel-reviews', 'รีวิวที่พัก']], approver: [['approver-queue', 'คิวรออนุมัติ'], ['schedule-all', 'แผนงานทั้งหมด'], ['analysis', 'วิเคราะห์รวม'], ['dashboard', 'แดชบอร์ด'], ['hotel-reviews', 'รีวิวที่พัก'], ['admin-data', 'จัดการข้อมูล']], employee: [['employee-view', 'ค้นหาแผน'], ['hotel-reviews', 'รีวิวที่พัก']] };
+  const tabs = { booker: [['booker-home', 'แผนของฉัน'], ['schedule-to-book', 'แผนงานที่ต้องจอง'], ['booker-form', 'สร้างคำขอจอง'], ['booker-vacancy', 'ห้องว่าง'], ['hotel-reviews', 'รีวิวที่พัก']], approver: [['approver-queue', 'คิวรออนุมัติ'], ['schedule-all', 'แผนงานทั้งหมด'], ['booker-vacancy', 'ห้องว่าง'], ['analysis', 'วิเคราะห์รวม'], ['dashboard', 'แดชบอร์ด'], ['hotel-reviews', 'รีวิวที่พัก'], ['admin-data', 'จัดการข้อมูล']], employee: [['employee-view', 'ค้นหาแผน'], ['hotel-reviews', 'รีวิวที่พัก']] };
   const tb = el('tabbar'); tb.innerHTML = '';
   tabs[role].forEach(([id, label], i) => {
     const b = document.createElement('button');
@@ -241,13 +241,16 @@ function bookerCardHtml(r) {
   </div>`;
 }
 
-// ===== booker: ห้องว่าง (จองสำเร็จแล้ว มีห้องว่างเหลือ) — เพิ่มผู้เข้าพักเข้าห้องเดิมได้เลย ไม่ต้องจองใหม่ =====
+// ===== ห้องว่าง (จองสำเร็จแล้ว มีห้องว่างเหลือ) — เพิ่มผู้เข้าพักเข้าห้องเดิมได้เลย ไม่ต้องจองใหม่
+// ผู้จองเห็นเฉพาะทีมของตัวเอง ส่วนผู้อนุมัติเห็นตามหมวดที่ตัวเองดูแล (activity/setup) ไม่ใช่ค่า default ของผู้จอง =====
 function bookerCategory() {
   return session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category)[0] || 'activity';
 }
+function vacancyCategory() { return currentRole === 'approver' ? approverCategory : bookerCategory(); }
+function backFromVacancy() { showView(currentRole === 'approver' ? 'approver-queue' : 'booker-home'); }
 let vacancyReqs = [];
 async function loadVacancyList() {
-  const data = await api('/api/vacancies?category=' + encodeURIComponent(bookerCategory()));
+  const data = await api('/api/vacancies?category=' + encodeURIComponent(vacancyCategory()));
   vacancyReqs = data.vacancies;
   renderVacancyList();
 }
@@ -283,7 +286,7 @@ function openAddGuest(id) {
 }
 async function searchAddGuest(q) {
   const r = addGuestCtx.request;
-  const params = new URLSearchParams({ category: bookerCategory(), q: q || '', checkin: r?.checkin_date || '', checkout: r?.checkout_date || '' });
+  const params = new URLSearchParams({ category: vacancyCategory(), q: q || '', checkin: r?.checkin_date || '', checkout: r?.checkout_date || '' });
   const data = await api('/api/staff?' + params.toString());
   const rows = data.staff.filter((s) => !isAddGuestSelected(s.code));
   const listEl = el('addGuestAcList');
