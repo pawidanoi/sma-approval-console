@@ -828,7 +828,7 @@ app.post('/api/admin/staff', requireApprover, async (req, res) => {
   };
   const { data, error } = await supabase.from('approval_staff').upsert(row, { onConflict: 'code,category' }).select().single();
   if (error) return res.status(500).json({ error: 'บันทึกไม่สำเร็จ: ' + error.message });
-  await ref.forceRefresh();
+  await ref.refreshCacheOnly();
   res.status(201).json({ staff: data });
 });
 
@@ -851,7 +851,7 @@ app.put('/api/admin/staff/:code/:category', requireApprover, async (req, res) =>
   const { data, error } = await supabase.from('approval_staff').update(update).eq('code', code).eq('category', category).select().maybeSingle();
   if (error) return res.status(500).json({ error: 'บันทึกไม่สำเร็จ: ' + error.message });
   if (!data) return res.status(404).json({ error: 'ไม่พบพนักงานนี้' });
-  await ref.forceRefresh();
+  await ref.refreshCacheOnly();
   res.json({ staff: data });
 });
 
@@ -859,7 +859,7 @@ app.delete('/api/admin/staff/:code/:category', requireApprover, async (req, res)
   const { code, category } = req.params;
   const { error } = await supabase.from('approval_staff').delete().eq('code', code).eq('category', category);
   if (error) return res.status(500).json({ error: 'ลบไม่สำเร็จ: ' + error.message });
-  await ref.forceRefresh();
+  await ref.refreshCacheOnly();
   res.json({ ok: true });
 });
 
