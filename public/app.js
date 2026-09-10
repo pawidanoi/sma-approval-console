@@ -257,13 +257,13 @@ async function loadVacancyList() {
 function renderVacancyList() {
   el('vacancyList').innerHTML = vacancyReqs.length
     ? '<div class="req-grid">' + vacancyReqs.map(vacancyCardHtml).join('') + '</div>'
-    : emptyStateHtml('suitcase', 'ไม่มีห้องว่างตอนนี้', 'รายการที่จองสำเร็จแล้วและมีห้องว่างเหลือจะมาอยู่ที่นี่');
+    : emptyStateHtml('suitcase', 'ไม่มีห้องว่างตอนนี้', 'รายการที่อนุมัติแล้วหรือจองสำเร็จแล้ว และมีห้องว่างเหลือจะมาอยู่ที่นี่');
 }
 function vacancyCardHtml(r) {
   const genderLabel = r.spareGender === 'M' ? 'ชาย' : 'หญิง';
   return `<div class="trav-card">
     <div class="trav-top">${avatarHtml(r.createdByName || r.team_code, 36)}<div class="info"><h3>${r.branch?.name || r.branch_code}</h3><div class="sub">${r.team_code || ''} · จองโดย ${r.createdByName}</div></div><span class="pill ${r.inStay ? 'pill-accent' : 'pill-success'}">${r.inStay ? 'กำลังเข้าพัก' : 'ยังไม่เช็คอิน'}</span></div>
-    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${icon('hotel', 14)} ${r.hotel?.name || '-'}</span></div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${icon('hotel', 14)} ${r.hotel?.name || (r.status === 'approved' ? 'ยังไม่จองโรงแรม' : '-')}</span></div>
     <div class="trav-meta" style="border-top:none; padding-top:0;">${icon('users', 14)} ชาย ${r.maleCount} · หญิง ${r.femaleCount}<span class="dot"></span><span style="color:var(--success-deep); font-weight:700;">เหลือห้องว่าง 1 ที่ (${genderLabel})</span></div>
     <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="openAddGuest(${r.id})">${icon('users', 14)} ขอเพิ่มผู้เข้าพัก</button>
   </div>`;

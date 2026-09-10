@@ -686,12 +686,14 @@ app.patch('/api/requests/:id', async (req, res) => {
   res.json({ request: await serializeRequest(full) });
 });
 
-// รายการจองที่ "สำเร็จ" แล้วและยังไม่เช็คเอาท์ ที่มีห้องว่างเหลือ (เศษเพศเดียวกัน) — กดเพิ่มผู้เข้าพักเข้าไปในห้องที่มีอยู่แล้วได้เลย ไม่ต้องจองใหม่
+// รายการจองที่ "อนุมัติแล้ว" หรือ "สำเร็จ" แล้ว และยังไม่เช็คเอาท์ ที่มีห้องว่างเหลือ (เศษเพศเดียวกัน)
+// — กดเพิ่มผู้เข้าพักเข้าไปในห้องที่มีอยู่แล้วได้เลย ไม่ต้องจองใหม่ (รวม "อนุมัติแล้ว" ด้วย เพราะผู้อนุมัติ
+// ต้องการเห็น/เพิ่มคนได้ทันทีที่กดอนุมัติ ไม่ต้องรอให้คนจองไปกรอกเลขยืนยันจากโรงแรมก่อน)
 // หมายเหตุ: ตั้งชื่อ path แยกจาก /api/requests/:id เพราะถ้าใช้ /api/requests/vacancies express จะจับ "vacancies" เป็น :id ก่อน (ชนกับ route ที่ประกาศไว้ก่อนหน้านี้)
 app.get('/api/vacancies', async (req, res) => {
   const { category } = req.query;
   const today = new Date().toISOString().slice(0, 10);
-  let query = supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('status', 'done').gte('checkout_date', today);
+  let query = supabase.from('approval_requests').select('*, approval_request_guests(*)').in('status', ['approved', 'done']).gte('checkout_date', today);
   if (category) query = query.eq('team_category', category);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -707,14 +709,14 @@ app.get('/api/vacancies', async (req, res) => {
   res.json({ vacancies });
 });
 
-// เพิ่มผู้เข้าพักเข้าไปในคำขอที่ "สำเร็จ" แล้ว (จองที่พักไว้แล้ว มีห้องว่างเหลือ) — ไม่ต้องขออนุมัติใหม่ เพราะที่พัก/วันที่/ทีมเดิมไม่เปลี่ยน
+// เพิ่มผู้เข้าพักเข้าไปในคำขอที่ "อนุมัติแล้ว" หรือ "สำเร็จ" แล้ว (มีห้องว่างเหลือ) — ไม่ต้องขออนุมัติใหม่ เพราะที่พัก/วันที่/ทีมเดิมไม่เปลี่ยน
 app.post('/api/requests/:id/add-guests', async (req, res) => {
   const id = req.params.id;
   const { actor, guests } = req.body;
   if (!Array.isArray(guests) || !guests.length) return res.status(400).json({ error: 'ต้องระบุผู้เข้าพักที่จะเพิ่มอย่างน้อย 1 คน' });
   const { data: r } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
-  if (r.status !== 'done') return res.status(400).json({ error: 'เพิ่มผู้เข้าพักได้เฉพาะรายการที่จองสำเร็จแล้วเท่านั้น' });
+  if (r.status !== 'done' && r.status !== 'approved') return res.status(400).json({ error: 'เพิ่มผู้เข้าพักได้เฉพาะรายการที่อนุมัติแล้วหรือจองสำเร็จแล้วเท่านั้น' });
 
   const existingCodes = new Set((r.approval_request_guests || []).map((g) => g.employee_code).filter(Boolean));
   const errors = [];
