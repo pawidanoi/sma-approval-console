@@ -666,15 +666,14 @@ app.patch('/api/requests/:id', async (req, res) => {
   let update = null;
 
   if (action === 'book') {
-    // AREA จองใน Choowap จริงแล้ว มากรอกว่าได้ที่พักไหน+เลขยืนยัน — รอเจ้าของทีมอนุมัติต่อ (แทนที่ 'confirm' เดิม
-    // ซึ่งเคยเป็นขั้นตอนสุดท้าย — ตอนนี้ย้ายมาเป็นขั้นก่อนอนุมัติแทน)
+    // AREA เลือกที่พักที่จะจองจริง — ยังไม่มีเลขยืนยัน เพราะยังไม่ได้อนุมัติ (เลขยืนยันตัวจริงจะได้ตอน
+    // จองใน Choowap จริงหลังเจ้าของทีมอนุมัติแล้ว ไปกรอกพร้อมวอยเชอร์ในขั้น finalize)
     if (r.status !== 'pending') return res.status(400).json({ error: 'จองได้เฉพาะคำขอที่ยังไม่มีใครจองเท่านั้น' });
-    if (!confirmation_no) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
     const candidates = r.hotel_candidates || [];
     const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
-    if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจากอันดับที่เลือกไว้' });
+    if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าจะจองที่พักอันไหนจากอันดับที่เลือกไว้' });
     update = {
-      status: 'booked', confirmation_no, booked_by: actor, booked_at: new Date().toISOString(),
+      status: 'booked', booked_by: actor, booked_at: new Date().toISOString(),
       hotel_code: chosen.code, hotel_name: chosen.name, hotel_lat: chosen.lat, hotel_lng: chosen.lng,
       hotel_price_per_night: chosen.price_per_night, hotel_map_link: chosen.map_link,
     };
