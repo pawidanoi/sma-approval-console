@@ -188,14 +188,18 @@ function logout() {
 
 // ===== booker home =====
 const STATUS_LABEL = {
-  pending: ['รออนุมัติ', 'pill-warning'], approved: ['อนุมัติแล้ว รอจอง', 'pill-accent'],
+  pending: ['รอ AREA จองที่พัก', 'pill-warning'], booked: ['จองแล้ว รอเจ้าของทีมอนุมัติ', 'pill-accent'],
+  approved: ['อนุมัติแล้ว รอแนบวอยเชอร์', 'pill-accent'],
   done: ['จองสำเร็จ', 'pill-success'], rejected: ['ตีกลับ', 'pill-danger'],
 };
 let bookerAllReqs = [];
 let bookerShowArchive = false;
 let bookerStatusFilter = null;
 async function loadBookerHome() {
-  const data = await api('/api/requests?actor=' + encodeURIComponent(session.employee.code));
+  // ผู้จอง (AREA) เห็นคำขอทุกอันของทีมที่ตัวเองดูแล (รวมที่พนักงานจองเอง) — พนักงานเห็นแค่ของตัวเอง (ไม่ส่ง role=booker)
+  const params = new URLSearchParams({ actor: session.employee.code });
+  if (currentRole === 'booker') { params.set('role', 'booker'); params.set('category', bookerCategory()); }
+  const data = await api('/api/requests?' + params.toString());
   bookerAllReqs = data.requests;
   bookerShowArchive = false;
   bookerStatusFilter = null;
@@ -205,11 +209,11 @@ function toggleBookerArchive() { bookerShowArchive = !bookerShowArchive; bookerS
 function filterBookerByStatus(status) { bookerStatusFilter = bookerStatusFilter === status ? null : status; renderBookerList(); }
 function renderBookerList() {
   const reqs = bookerAllReqs;
-  const counts = { pending: 0, approved: 0, done: 0, rejected: 0 };
+  const counts = { pending: 0, booked: 0, approved: 0, done: 0, rejected: 0 };
   reqs.forEach((r) => counts[r.status]++);
   const tile = (status, iconName, label) => `<div class="snap" style="cursor:pointer; ${bookerStatusFilter === status ? 'border-color:var(--accent); box-shadow:var(--shadow);' : ''}" onclick="filterBookerByStatus('${status}')"><div class="ic">${icon(iconName, 20)}</div><div class="tx"><b class="num">${counts[status]}</b><span>${label}</span></div></div>`;
   el('bookerStats').innerHTML =
-    tile('pending', 'clock', 'รออนุมัติ') + tile('approved', 'package', 'อนุมัติแล้ว รอจอง') +
+    tile('pending', 'clock', 'รอ AREA จอง') + tile('booked', 'package', 'จองแล้ว รอเจ้าของทีมอนุมัติ') + tile('approved', 'package', 'อนุมัติแล้ว รอแนบวอยเชอร์') +
     tile('done', 'check', 'จองสำเร็จ') + tile('rejected', 'undo', 'ถูกตีกลับ');
 
   let shown, emptyKind, emptyTitle, emptySub;
@@ -218,7 +222,7 @@ function renderBookerList() {
     el('bookerArchiveToggle').innerHTML = `<button class="btn btn-ghost btn-sm" onclick="filterBookerByStatus('${bookerStatusFilter}')">‹ ล้างตัวกรอง แสดงทั้งหมด</button>`;
     emptyKind = 'search'; emptyTitle = 'ไม่พบรายการในสถานะนี้'; emptySub = '';
   } else {
-    const active = reqs.filter((r) => r.status === 'pending' || r.status === 'approved');
+    const active = reqs.filter((r) => r.status === 'pending' || r.status === 'booked' || r.status === 'approved');
     const archived = reqs.filter((r) => r.status === 'done' || r.status === 'rejected');
     shown = bookerShowArchive ? archived : active;
     el('bookerArchiveToggle').innerHTML = bookerShowArchive
@@ -248,6 +252,7 @@ function bookerCategory() {
 }
 function vacancyCategory() { return currentRole === 'approver' ? approverCategory : bookerCategory(); }
 function backFromVacancy() { showView(currentRole === 'approver' ? 'approver-queue' : 'booker-home'); }
+function backFromBookerForm() { showView(currentRole === 'employee' ? 'employee-view' : 'booker-home'); }
 let vacancyReqs = [];
 async function loadVacancyList() {
   const data = await api('/api/vacancies?category=' + encodeURIComponent(vacancyCategory()));
@@ -257,13 +262,13 @@ async function loadVacancyList() {
 function renderVacancyList() {
   el('vacancyList').innerHTML = vacancyReqs.length
     ? '<div class="req-grid">' + vacancyReqs.map(vacancyCardHtml).join('') + '</div>'
-    : emptyStateHtml('suitcase', 'ไม่มีห้องว่างตอนนี้', 'รายการที่อนุมัติแล้วหรือจองสำเร็จแล้ว และมีห้องว่างเหลือจะมาอยู่ที่นี่');
+    : emptyStateHtml('suitcase', 'ไม่มีห้องว่างตอนนี้', 'รายการที่จองแล้ว อนุมัติแล้ว หรือสำเร็จแล้ว และมีห้องว่างเหลือจะมาอยู่ที่นี่');
 }
 function vacancyCardHtml(r) {
   const genderLabel = r.spareGender === 'M' ? 'ชาย' : 'หญิง';
   return `<div class="trav-card">
     <div class="trav-top">${avatarHtml(r.createdByName || r.team_code, 36)}<div class="info"><h3>${r.branch?.name || r.branch_code}</h3><div class="sub">${r.team_code || ''} · จองโดย ${r.createdByName}</div></div><span class="pill ${r.inStay ? 'pill-accent' : 'pill-success'}">${r.inStay ? 'กำลังเข้าพัก' : 'ยังไม่เช็คอิน'}</span></div>
-    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${icon('hotel', 14)} ${r.hotel?.name || (r.status === 'approved' ? 'ยังไม่จองโรงแรม' : '-')}</span></div>
+    <div class="trav-meta"><span>${icon('calendar', 14)} <b>${r.checkin_date} – ${r.checkout_date}</b></span><span class="dot"></span><span>${icon('hotel', 14)} ${r.hotel?.name || '-'}</span></div>
     <div class="trav-meta" style="border-top:none; padding-top:0;">${icon('users', 14)} ชาย ${r.maleCount} · หญิง ${r.femaleCount}<span class="dot"></span><span style="color:var(--success-deep); font-weight:700;">เหลือห้องว่าง 1 ที่ (${genderLabel})</span></div>
     <button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick="openAddGuest(${r.id})">${icon('users', 14)} ขอเพิ่มผู้เข้าพัก</button>
   </div>`;
@@ -438,6 +443,7 @@ function scheduleMineItemHtml(it) {
   return `<div class="trav-card" style="cursor:default;">
     <div class="trav-top"><div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.mission_type || '-'}</div></div>${statusPill}</div>
     <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span>${it.matched?.hotel_name ? `<span class="dot"></span><span>${icon('hotel', 14)} ${it.matched.hotel_name}</span>` : ''}</div>
+    ${!it.matched ? `<button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='bookFromSchedule(${JSON.stringify(it)})'>${icon('check', 14)} จองเลย</button>` : ''}
   </div>`;
 }
 
@@ -459,7 +465,8 @@ function resetForm() {
   const bookerCats = session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category);
   const seg = el('teamCatSeg');
   if (bookerCats.length <= 1) {
-    form.category = bookerCats[0] || 'activity';
+    // พนักงานที่จองเอง (ไม่มีบทบาทผู้จอง) ให้ยึดหมวดทีมของตัวเองแทน ไม่ใช่ default 'activity' เสมอ
+    form.category = bookerCats[0] || session.employee.category || 'activity';
     seg.innerHTML = `<div class="seg locked">${CATEGORY_LABEL[form.category]}</div>`;
   } else {
     seg.innerHTML = bookerCats.map((c, i) => `<div class="seg ${i === 0 ? 'on' : ''}" data-val="${c}" onclick="selectCategory('${c}')">${CATEGORY_LABEL[c]}</div>`).join('');
@@ -835,7 +842,8 @@ async function submitRequest() {
   try {
     el('submitBtn').disabled = true;
     await api('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    showView('booker-home'); loadBookerHome();
+    if (currentRole === 'employee') { showView('employee-view'); loadEmployeeView(); }
+    else { showView('booker-home'); loadBookerHome(); }
   } catch (e) {
     el('formError').innerHTML = errBox(e.message);
   } finally {
@@ -852,13 +860,21 @@ async function openDetail(id, backTarget, readonly) {
 }
 function detailHtml(r) {
   const [label, cls] = STATUS_LABEL[r.status];
+  const doneNote = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span>${r.voucher_url ? `<div style="margin-top:8px;"><img src="${r.voucher_url}" alt="วอยเชอร์" style="max-width:220px; border-radius:8px; border:1px solid var(--line);"></div>` : ''}</div>`;
   let gate = '';
   if (detailCtx.readonly) {
-    gate = r.status === 'done' ? `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span></div>` : `<div class="note-box muted"><b>ยังไม่จองสำเร็จ</b>ดูได้อย่างเดียว</div>`;
+    if (r.status === 'done') gate = doneNote;
+    else if (r.status === 'booked') gate = `<div class="note-box muted"><b>จองแล้ว รอเจ้าของทีมอนุมัติ</b>ดูได้อย่างเดียว</div>`;
+    else if (r.status === 'approved') gate = `<div class="note-box muted"><b>อนุมัติแล้ว รอ AREA แนบวอยเชอร์</b>ดูได้อย่างเดียว</div>`;
+    else gate = `<div class="note-box muted"><b>ยังไม่จองสำเร็จ</b>ดูได้อย่างเดียว</div>`;
+  } else if (r.status === 'pending') {
+    gate = `<button class="btn btn-success btn-block" onclick="openBook(${r.id})">${icon('check', 16)} จองใน Choowap เสร็จแล้ว → กรอกเลขยืนยัน</button>`;
+  } else if (r.status === 'booked') {
+    gate = `<div class="note-box muted"><b>จองแล้ว</b>รอเจ้าของทีมอนุมัติ — เลขยืนยัน <span class="num">${r.confirmation_no}</span></div>`;
   } else if (r.status === 'approved') {
-    gate = `<button class="btn btn-success btn-block" onclick="openComplete(${r.id})">${icon('check', 16)} จองใน Choowap เสร็จแล้ว → กรอกเลขยืนยัน</button>`;
+    gate = `<button class="btn btn-success btn-block" onclick="openFinalize(${r.id})">${icon('check', 16)} แนบวอยเชอร์ → ปิดงาน</button>`;
   } else if (r.status === 'done') {
-    gate = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span></div>`;
+    gate = doneNote;
   } else if (r.status === 'rejected') {
     gate = `<div class="note-box danger"><b>ถูกตีกลับ</b>${r.reject_reason || ''}</div>`;
   } else {
@@ -875,8 +891,9 @@ function detailHtml(r) {
     </div>`).join('');
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
   const candDist = (h) => (r.branch?.lat != null && h.lat != null ? haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) : null);
-  const hotelListText = r.status === 'done' ? (r.hotel?.name || '-') : candidates.map((h, i) => `${i + 1}. ${h.name} (${candDist(h) ?? '-'} กม.)`).join(' / ');
-  const hotelKvValue = r.status === 'done'
+  const isChosen = ['booked', 'approved', 'done'].includes(r.status);
+  const hotelListText = isChosen ? (r.hotel?.name || '-') : candidates.map((h, i) => `${i + 1}. ${h.name} (${candDist(h) ?? '-'} กม.)`).join(' / ');
+  const hotelKvValue = isChosen
     ? (r.hotel?.name || '-')
     : candidates.map((h, i) => {
         const d = candDist(h);
@@ -885,14 +902,14 @@ function detailHtml(r) {
       }).join('');
   return `
     <button class="back-link" onclick="showView('${detailCtx.backTarget}')">‹ กลับ</button>
-    <div class="page-head"><div><h2>รายละเอียดการจอง</h2><div class="sub">ใช้หน้านี้ก็อบข้อมูลไปกรอกจองในระบบ Choowap${r.status !== 'done' ? ' — ลองจองตามลำดับที่พักด้านล่าง ถ้าที่ 1 เต็มให้ลองที่ 2, 3 ต่อไป' : ''}</div></div><span class="pill ${cls}">${label}</span></div>
+    <div class="page-head"><div><h2>รายละเอียดการจอง</h2><div class="sub">ใช้หน้านี้ก็อบข้อมูลไปกรอกจองในระบบ Choowap${!isChosen ? ' — ลองจองตามลำดับที่พักด้านล่าง ถ้าที่ 1 เต็มให้ลองที่ 2, 3 ต่อไป' : ''}</div></div><span class="pill ${cls}">${label}</span></div>
     <div class="copy-block">
       <div class="copy-head"><span>ข้อมูลที่พัก / ทริป</span><button class="btn btn-sm" onclick='copyText(${JSON.stringify(`ประเภทงาน: ${r.mission_type}\nทีม: ${r.team_code}\nสาขา: ${r.branch?.name}\nที่พัก: ${hotelListText}\nเข้าพัก: ${r.checkin_date}\nเช็คเอาท์: ${r.checkout_date}\nจำนวนคืน: ${r.nights}\nจำนวนคน: ${r.guests.length}\nจำนวนห้อง: ${r.rooms}`)}, this)'>${icon('copy', 14)} ก็อบปี้</button></div>
       <div class="kv-grid">
         ${kv(icon('briefcase', 16), 'ประเภทงาน', r.mission_type)}
         ${kv(icon('users', 16), 'ทีม', r.team_code || '-')}
         ${kv(icon('pin', 16), 'สาขาที่ไป', (r.branch?.name || '') + ', ' + (r.branch?.province || ''))}
-        ${kv(icon('hotel', 16), r.status === 'done' ? 'ที่พัก' : `ที่พัก (${candidates.length} อันดับ)`, hotelKvValue)}
+        ${kv(icon('hotel', 16), isChosen ? 'ที่พัก' : `ที่พัก (${candidates.length} อันดับ)`, hotelKvValue)}
         ${kv(icon('calendar', 16), 'วันเข้าพัก', `<span class="num">${r.checkin_date}</span>`)}
         ${kv(icon('calendar', 16), 'วันเช็คเอาท์', `<span class="num">${r.checkout_date}</span>`)}
         ${kv(icon('moon', 16), 'จำนวนคืน', `<span class="num">${r.nights} คืน</span>`)}
@@ -907,7 +924,8 @@ function detailHtml(r) {
 }
 let completeChosenHotel = null;
 let completeCandidates = [];
-async function openComplete(id) {
+// ขั้นที่ 1: AREA จองใน Choowap จริงแล้ว มากรอกว่าได้ที่พักไหน+เลขยืนยัน (pending -> booked)
+async function openBook(id) {
   const data = await api('/api/requests/' + id);
   const r = data.request;
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
@@ -927,7 +945,7 @@ async function openComplete(id) {
       </div>
       <div><span class="field-label">เลขยืนยันจากโรงแรม *</span><input type="text" id="confirmNo" placeholder="เช่น RSV-88213" style="border-color:var(--success);"></div>
       <div id="completeError"></div>
-      <button class="btn btn-success btn-block" onclick="submitComplete(${id})">บันทึกจองสำเร็จ</button>
+      <button class="btn btn-success btn-block" onclick="submitBook(${id})">บันทึกว่าจองแล้ว → ส่งให้เจ้าของทีมอนุมัติ</button>
     </div>`;
   showView('booking-complete');
 }
@@ -943,16 +961,76 @@ function chooseCompleteHotel(code) {
   completeChosenHotel = code;
   el('completeHotelList').innerHTML = completeCandidates.map((h, i) => completeHotelRowHtml(h, i)).join('');
 }
-async function submitComplete(id) {
+async function submitBook(id) {
   const confirmation_no = el('confirmNo').value.trim();
   if (!completeChosenHotel) { el('completeError').innerHTML = errBox('ต้องเลือกว่าได้ที่พักอันไหนจริง'); return; }
   try {
-    await api('/api/requests/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'confirm', actor: session.employee.code, confirmation_no, chosen_hotel_code: completeChosenHotel }) });
+    await api('/api/requests/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'book', actor: session.employee.code, confirmation_no, chosen_hotel_code: completeChosenHotel }) });
     showView(detailCtx.backTarget === 'approver-queue' ? 'approver-queue' : 'booker-home');
     if (currentRole === 'booker') loadBookerHome();
     if (currentRole === 'approver') loadApproverQueue();
   } catch (e) {
     el('completeError').innerHTML = errBox(e.message);
+  }
+}
+// ขั้นที่ 2: หลังเจ้าของทีมอนุมัติแล้ว AREA ยืนยันที่พักอีกครั้ง (แก้ได้ถ้าเปลี่ยน) + แนบรูปวอยเชอร์ (approved -> done)
+let finalizeChosenHotel = null;
+let finalizeCandidates = [];
+async function openFinalize(id) {
+  const data = await api('/api/requests/' + id);
+  const r = data.request;
+  const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
+  finalizeCandidates = candidates;
+  finalizeChosenHotel = r.hotel?.code || candidates[0]?.code || null;
+  el('completeRoot').innerHTML = `
+    <button class="back-link" onclick="openDetail(${id}, '${detailCtx.backTarget}', false); showView('booking-detail');">‹ กลับไปรายละเอียดการจอง</button>
+    <div class="card" style="border-color:var(--success); background:var(--success-soft); display:flex; flex-direction:column; gap:12px;">
+      <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:2px;">
+        ${EMPTY_ILLUSTRATIONS.allDone}
+        <div class="section-title" style="color:var(--success-deep);">เจ้าของทีมอนุมัติแล้ว — ยืนยันที่พักอีกครั้ง แล้วแนบวอยเชอร์เพื่อปิดงาน</div>
+        <p style="font-size:12.5px; color:var(--ink-soft); margin:0;">${r.branch?.name} · ${r.checkin_date} – ${r.checkout_date}</p>
+      </div>
+      <div>
+        <span class="field-label">ที่พักที่จองได้จริง (แก้ได้ถ้าเปลี่ยน)</span>
+        <div id="finalizeHotelList">${candidates.map((h, i) => finalizeHotelRowHtml(h, i)).join('')}</div>
+      </div>
+      <div><span class="field-label">เลขยืนยันจากโรงแรม *</span><input type="text" id="finalizeConfirmNo" placeholder="เช่น RSV-88213" value="${r.confirmation_no || ''}" style="border-color:var(--success);"></div>
+      <div><span class="field-label">รูปวอยเชอร์จาก Choowap *</span><input type="file" id="voucherFile" accept="image/*"></div>
+      <div id="finalizeError"></div>
+      <button class="btn btn-success btn-block" onclick="submitFinalize(${id})">บันทึกจองสำเร็จ</button>
+    </div>`;
+  showView('booking-complete');
+}
+function finalizeHotelRowHtml(h, i) {
+  const selected = finalizeChosenHotel === h.code;
+  return `<div class="hotel-row" onclick='chooseFinalizeHotel(${JSON.stringify(h.code)})'>
+    <div class="radio ${selected ? 'on' : ''}"></div>
+    <div style="flex:1;"><div class="hotel-name">${i + 1}. ${h.name}${i === 0 ? ' (อันดับหลัก)' : ''}</div></div>
+    <div class="hotel-price">${h.price_per_night ?? '-'}.-</div>
+  </div>`;
+}
+function chooseFinalizeHotel(code) {
+  finalizeChosenHotel = code;
+  el('finalizeHotelList').innerHTML = finalizeCandidates.map((h, i) => finalizeHotelRowHtml(h, i)).join('');
+}
+async function submitFinalize(id) {
+  const confirmation_no = el('finalizeConfirmNo').value.trim();
+  const voucherFile = el('voucherFile').files[0];
+  if (!finalizeChosenHotel) { el('finalizeError').innerHTML = errBox('ต้องเลือกว่าได้ที่พักอันไหนจริง'); return; }
+  if (!confirmation_no) { el('finalizeError').innerHTML = errBox('ต้องใส่เลขยืนยันจากโรงแรม'); return; }
+  if (!voucherFile) { el('finalizeError').innerHTML = errBox('ต้องแนบรูปวอยเชอร์จาก Choowap'); return; }
+  try {
+    const body = new FormData();
+    body.append('actor', session.employee.code);
+    body.append('confirmation_no', confirmation_no);
+    body.append('chosen_hotel_code', finalizeChosenHotel);
+    body.append('voucher', voucherFile);
+    await api('/api/requests/' + id + '/finalize', { method: 'POST', body });
+    showView(detailCtx.backTarget === 'approver-queue' ? 'approver-queue' : 'booker-home');
+    if (currentRole === 'booker') loadBookerHome();
+    if (currentRole === 'approver') loadApproverQueue();
+  } catch (e) {
+    el('finalizeError').innerHTML = errBox(e.message);
   }
 }
 
@@ -974,12 +1052,14 @@ async function loadApproverQueue() {
 function toggleApproverArchive() { approverShowArchive = !approverShowArchive; approverStatusFilter = null; renderApproverList(); }
 function filterApproverByStatus(status) { approverStatusFilter = approverStatusFilter === status ? null : status; renderApproverList(); }
 function renderApproverList() {
-  const reqs = approverAllReqs.slice().sort((a, b) => (a.status === 'pending' ? -1 : 1) - (b.status === 'pending' ? -1 : 1));
-  const counts = { pending: 0, approved: 0, done: 0, rejected: 0 };
+  // เรียงให้ 'booked' (รอคุณอนุมัติ) ขึ้นก่อนเสมอ เพราะเป็นสถานะเดียวที่ต้องให้คุณกดจริง
+  const actionRank = (s) => (s === 'booked' ? 0 : s === 'pending' ? 1 : s === 'approved' ? 2 : 3);
+  const reqs = approverAllReqs.slice().sort((a, b) => actionRank(a.status) - actionRank(b.status));
+  const counts = { pending: 0, booked: 0, approved: 0, done: 0, rejected: 0 };
   reqs.forEach((r) => counts[r.status]++);
   const tile = (status, iconName, label) => `<div class="snap" style="cursor:pointer; ${approverStatusFilter === status ? 'border-color:var(--accent); box-shadow:var(--shadow);' : ''}" onclick="filterApproverByStatus('${status}')"><div class="ic">${icon(iconName, 20)}</div><div class="tx"><b class="num">${counts[status]}</b><span>${label}</span></div></div>`;
   el('approverStats').innerHTML =
-    tile('pending', 'clock', 'รออนุมัติ') + tile('approved', 'package', 'อนุมัติแล้ว รอจอง') +
+    tile('booked', 'clock', 'รอคุณอนุมัติ') + tile('pending', 'package', 'รอ AREA จอง') + tile('approved', 'package', 'รอ AREA แนบวอยเชอร์') +
     tile('done', 'check', 'จองสำเร็จ') + tile('rejected', 'undo', 'ตีกลับ');
 
   let shown, emptyKind, emptyTitle, emptySub;
@@ -988,7 +1068,7 @@ function renderApproverList() {
     el('approverArchiveToggle').innerHTML = `<button class="btn btn-ghost btn-sm" onclick="filterApproverByStatus('${approverStatusFilter}')">‹ ล้างตัวกรอง แสดงทั้งหมด</button>`;
     emptyKind = 'search'; emptyTitle = 'ไม่พบรายการในสถานะนี้'; emptySub = '';
   } else {
-    const active = reqs.filter((r) => r.status === 'pending' || r.status === 'approved');
+    const active = reqs.filter((r) => r.status === 'pending' || r.status === 'booked' || r.status === 'approved');
     const archived = reqs.filter((r) => r.status === 'done' || r.status === 'rejected');
     shown = approverShowArchive ? archived : active;
     el('approverArchiveToggle').innerHTML = approverShowArchive
@@ -1026,8 +1106,10 @@ async function openApproverDetail(id) {
   }).join('');
   let actions = '';
   if (r.status === 'pending') {
+    actions = `<div class="note-box muted"><b>รอ AREA จองใน Choowap ก่อน</b>จะมาให้คุณอนุมัติหลัง AREA กด "จองแล้ว"</div>`;
+  } else if (r.status === 'booked') {
     actions = `<div class="sticky-foot" id="approverActionBar">
-      <button class="btn btn-danger" style="flex:1;" onclick="showRejectBox(${r.id})">${icon('undo', 16)} ตีกลับ</button>
+      <button class="btn btn-danger" style="flex:1;" onclick="showRejectBox(${r.id})">${icon('undo', 16)} ตีกลับ (ให้ลองที่พักอื่น)</button>
       <button class="btn btn-success" style="flex:1.4;" onclick="approveRequest(${r.id})">${icon('check', 16)} อนุมัติ</button>
     </div>
     <div class="sticky-foot" id="rejectBox" style="display:none; flex-direction:column; gap:8px;">
@@ -1038,19 +1120,20 @@ async function openApproverDetail(id) {
       </div>
     </div>`;
   } else if (r.status === 'approved') {
-    actions = `<button class="btn btn-success btn-block" onclick="openDetail(${r.id}, 'approver-queue', false); showView('booking-detail');">→ ไปหน้ารายละเอียดการจอง</button>`;
+    actions = `<div class="note-box muted"><b>อนุมัติแล้ว</b>รอ AREA แนบวอยเชอร์เพื่อปิดงาน</div>`;
   } else if (r.status === 'done') {
-    actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span></div>`;
+    actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span>${r.voucher_url ? `<div style="margin-top:8px;"><img src="${r.voucher_url}" alt="วอยเชอร์" style="max-width:220px; border-radius:8px; border:1px solid var(--line);"></div>` : ''}</div>`;
   } else if (r.status === 'rejected') {
     actions = `<div class="note-box danger"><b>ตีกลับแล้ว</b>${r.reject_reason || ''}</div>`;
   }
-  const candidatesHtml = (r.status !== 'done' && (r.hotelCandidates || []).length > 1) ? `
+  const apChosen = ['booked', 'approved', 'done'].includes(r.status);
+  const candidatesHtml = (!apChosen && (r.hotelCandidates || []).length > 1) ? `
     <div class="note-box muted" style="margin:10px 0;"><b>ที่พักที่เลือกไว้ (${r.hotelCandidates.length} อันดับ)</b>${r.hotelCandidates.map((h, i) => {
       const d = r.branch?.lat != null && h.lat != null ? haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) : null;
       const far = d != null && r.hotelMaxKm != null && d > r.hotelMaxKm;
       return `<div style="margin-top:4px;">${i + 1}. ${h.name}${i === 0 ? ' (หลัก)' : ''}${d != null ? ` · ${d} กม.${far ? ' ' + icon('alert', 12) : ''}` : ''}</div>`;
     }).join('')}</div>` : '';
-  const hotelHeadLabel = r.status === 'done' ? 'ที่พักที่คอนเฟิมแล้ว' : 'ที่พักอันดับ 1';
+  const hotelHeadLabel = apChosen ? 'ที่พักที่จองไว้' : 'ที่พักอันดับ 1';
   el('approverDetailRoot').innerHTML = `
     <button class="back-link" onclick="closeApproverDetail()">‹ กลับไปคิว</button>
     <div class="page-head"><div><h2>${r.branch?.name || r.branch_code}</h2><div class="sub">${r.team_code || ''} · ${r.mission_type} · ${r.checkin_date} – ${r.checkout_date} (${r.nights} คืน)</div><div class="sub" style="margin-top:2px;">${icon('hotel', 13)} ${hotelHeadLabel}: <b style="color:var(--ink);">${r.hotel?.name || '-'}</b></div></div></div>
@@ -1224,11 +1307,11 @@ async function loadDashboard() {
   const avgApproveMs = approvedOnes.length ? approvedOnes.reduce((sum, r) => sum + (new Date(r.approved_at) - new Date(r.created_at)), 0) / approvedOnes.length : null;
   const leadTimes = reqs.map((r) => (new Date(r.checkin_date) - new Date(r.created_at)) / 86400000);
   const avgLeadDays = leadTimes.length ? leadTimes.reduce((a, b) => a + b, 0) / leadTimes.length : null;
-  const pendingCount = reqs.filter((r) => r.status === 'pending').length;
+  const bookedCount = reqs.filter((r) => r.status === 'booked').length;
 
   el('dashStats').innerHTML = `
     <div class="snap"><div class="ic">${icon('briefcase', 20)}</div><div class="tx"><b class="num">${reqs.length}</b><span>คำขอทั้งหมด</span></div></div>
-    <div class="snap"><div class="ic">${icon('clock', 20)}</div><div class="tx"><b class="num">${pendingCount}</b><span>รออนุมัติตอนนี้</span></div></div>
+    <div class="snap"><div class="ic">${icon('clock', 20)}</div><div class="tx"><b class="num">${bookedCount}</b><span>รออนุมัติตอนนี้</span></div></div>
     <div class="snap"><div class="ic">${icon('check', 20)}</div><div class="tx"><b class="num" style="font-size:15px;">${avgApproveMs != null ? fmtHours(avgApproveMs) : '-'}</b><span>เวลาเฉลี่ยที่ใช้อนุมัติ</span></div></div>
     <div class="snap"><div class="ic">${icon('calendar', 20)}</div><div class="tx"><b class="num" style="font-size:15px;">${avgLeadDays != null ? avgLeadDays.toFixed(1) + ' วัน' : '-'}</b><span>จองล่วงหน้าเฉลี่ย</span></div></div>`;
 

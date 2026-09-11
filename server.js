@@ -299,7 +299,7 @@ app.get('/api/schedule-mine', async (req, res) => {
     const pairedRow = (byGroup.get(r.group_key) || []).find((s) => s.id !== r.id);
     const matched = r.matched_request_id ? requestsById.get(r.matched_request_id) : null;
     return {
-      id: r.id, row_type: r.row_type, mission_type: r.mission_type,
+      id: r.id, team_code: r.team_code, row_type: r.row_type, mission_type: r.mission_type,
       branch: findBranch(r.branch_code) || null,
       paired_branch: pairedRow ? findBranch(pairedRow.branch_code) || null : null,
       suggested_checkin: r.suggested_checkin, suggested_checkout: r.suggested_checkout,
@@ -417,7 +417,7 @@ async function getOpenBookingsMap() {
   const { data, error } = await supabase
     .from('approval_request_guests')
     .select('employee_code, approval_requests!inner(status, branch_name, checkin_date, checkout_date)')
-    .in('approval_requests.status', ['pending', 'approved']);
+    .in('approval_requests.status', ['pending', 'booked', 'approved']);
   if (error) throw new Error(error.message);
   const map = new Map();
   for (const row of data) {
@@ -470,7 +470,7 @@ async function computeDupWarnings(requestId, guests) {
       .select('request_id, approval_requests!inner(id, status, branch_name, checkin_date, checkout_date)')
       .eq('employee_code', g.employee_code)
       .neq('request_id', requestId)
-      .in('approval_requests.status', ['pending', 'approved']);
+      .in('approval_requests.status', ['pending', 'booked', 'approved']);
     if (rows && rows.length) {
       const o = rows[0].approval_requests;
       warnings.push({ employee_code: g.employee_code, name: g.name, conflictBranch: o.branch_name, conflictDates: `${o.checkin_date} – ${o.checkout_date}` });
@@ -616,7 +616,13 @@ app.get('/api/requests', async (req, res) => {
   const { actor, role, category, status } = req.query;
   let query = supabase.from('approval_requests').select('*, approval_request_guests(*)');
   if (role === 'approver' && category) query = query.eq('team_category', category).order('created_at', { ascending: true });
-  else if (actor) query = query.eq('created_by', actor).order('created_at', { ascending: false });
+  else if (actor && role === 'booker') {
+    // AREA ต้องเห็นคำขอทุกอันของทีมที่ตัวเองดูแล ไม่ใช่แค่อันที่ตัวเองเป็นคนสร้าง — เพราะตอนนี้พนักงานเองก็สร้างคำขอได้แล้ว
+    const ownedTeams = getOwnedTeams(actor, category || 'activity');
+    query = ownedTeams
+      ? query.in('team_code', [...ownedTeams]).order('created_at', { ascending: false })
+      : query.eq('created_by', actor).order('created_at', { ascending: false });
+  } else if (actor) query = query.eq('created_by', actor).order('created_at', { ascending: false });
   else query = query.order('created_at', { ascending: false });
   if (status) query = query.eq('status', status);
   const { data, error } = await query;
@@ -659,27 +665,66 @@ app.patch('/api/requests/:id', async (req, res) => {
   const { action, actor, reason, confirmation_no, chosen_hotel_code } = req.body;
   let update = null;
 
-  if (action === 'approve') {
-    if (r.status !== 'pending') return res.status(400).json({ error: 'คำขอนี้ไม่ได้อยู่ในสถานะรออนุมัติ' });
-    update = { status: 'approved', approved_by: actor, approved_at: new Date().toISOString() };
-  } else if (action === 'reject') {
-    if (!reason) return res.status(400).json({ error: 'ต้องระบุเหตุผลตีกลับ' });
-    update = { status: 'rejected', reject_reason: reason };
-  } else if (action === 'confirm') {
-    if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องอนุมัติก่อนถึงจะกดจองสำเร็จได้' });
+  if (action === 'book') {
+    // AREA จองใน Choowap จริงแล้ว มากรอกว่าได้ที่พักไหน+เลขยืนยัน — รอเจ้าของทีมอนุมัติต่อ (แทนที่ 'confirm' เดิม
+    // ซึ่งเคยเป็นขั้นตอนสุดท้าย — ตอนนี้ย้ายมาเป็นขั้นก่อนอนุมัติแทน)
+    if (r.status !== 'pending') return res.status(400).json({ error: 'จองได้เฉพาะคำขอที่ยังไม่มีใครจองเท่านั้น' });
     if (!confirmation_no) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
     const candidates = r.hotel_candidates || [];
     const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
-    if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจาก 5 อันดับที่เลือกไว้' });
+    if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจากอันดับที่เลือกไว้' });
     update = {
-      status: 'done', confirmation_no, done_by: actor, done_at: new Date().toISOString(),
+      status: 'booked', confirmation_no, booked_by: actor, booked_at: new Date().toISOString(),
       hotel_code: chosen.code, hotel_name: chosen.name, hotel_lat: chosen.lat, hotel_lng: chosen.lng,
       hotel_price_per_night: chosen.price_per_night, hotel_map_link: chosen.map_link,
     };
+  } else if (action === 'approve') {
+    if (r.status !== 'booked') return res.status(400).json({ error: 'คำขอนี้ยังไม่ได้จองใน Choowap ให้ AREA จองก่อนถึงจะอนุมัติได้' });
+    update = { status: 'approved', approved_by: actor, approved_at: new Date().toISOString() };
+  } else if (action === 'reject') {
+    if (!reason) return res.status(400).json({ error: 'ต้องระบุเหตุผลตีกลับ' });
+    // ตีกลับจาก 'booked' (ไม่เอาที่พักที่จองมา) ให้ย้อนกลับไป 'pending' เพื่อให้ AREA ลองจองที่พักอันดับอื่นแทน
+    // ตีกลับจากสถานะอื่น (ยังไม่จอง) ถือว่าไม่เอาทั้งแผนนี้เลย จบที่ 'rejected' เหมือนเดิม
+    update = r.status === 'booked'
+      ? { status: 'pending', reject_reason: reason }
+      : { status: 'rejected', reject_reason: reason };
   } else {
     return res.status(400).json({ error: 'ไม่รู้จัก action นี้' });
   }
 
+  const { error: updErr } = await supabase.from('approval_requests').update(update).eq('id', id);
+  if (updErr) return res.status(500).json({ error: updErr.message });
+  const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
+  res.json({ request: await serializeRequest(full) });
+});
+
+// ขั้นตอนสุดท้ายหลังเจ้าของทีมอนุมัติการจองแล้ว — AREA ยืนยันที่พักอีกครั้ง (แก้ได้ถ้าเปลี่ยน) พร้อมแนบรูปวอยเชอร์จาก Choowap
+app.post('/api/requests/:id/finalize', upload.single('voucher'), async (req, res) => {
+  const id = req.params.id;
+  const { actor, confirmation_no, chosen_hotel_code } = req.body;
+  const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
+  if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
+  if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องรอเจ้าของทีมอนุมัติการจองก่อนถึงจะแนบวอยเชอร์ได้' });
+  if (!req.file) return res.status(400).json({ error: 'ต้องแนบรูปวอยเชอร์จาก Choowap' });
+
+  const candidates = r.hotel_candidates || [];
+  const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
+  if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจากอันดับที่เลือกไว้' });
+  const finalConfirmationNo = String(confirmation_no || r.confirmation_no || '').trim();
+  if (!finalConfirmationNo) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
+
+  const ext = (req.file.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
+  const storagePath = `${id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+  const { error: upErr } = await supabase.storage.from('booking-vouchers').upload(storagePath, req.file.buffer, { contentType: req.file.mimetype });
+  if (upErr) return res.status(500).json({ error: 'อัพโหลดวอยเชอร์ไม่สำเร็จ: ' + upErr.message });
+  const { data: pub } = supabase.storage.from('booking-vouchers').getPublicUrl(storagePath);
+
+  const update = {
+    status: 'done', done_by: actor, done_at: new Date().toISOString(),
+    confirmation_no: finalConfirmationNo, voucher_url: pub.publicUrl,
+    hotel_code: chosen.code, hotel_name: chosen.name, hotel_lat: chosen.lat, hotel_lng: chosen.lng,
+    hotel_price_per_night: chosen.price_per_night, hotel_map_link: chosen.map_link,
+  };
   const { error: updErr } = await supabase.from('approval_requests').update(update).eq('id', id);
   if (updErr) return res.status(500).json({ error: updErr.message });
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
@@ -693,7 +738,7 @@ app.patch('/api/requests/:id', async (req, res) => {
 app.get('/api/vacancies', async (req, res) => {
   const { category } = req.query;
   const today = new Date().toISOString().slice(0, 10);
-  let query = supabase.from('approval_requests').select('*, approval_request_guests(*)').in('status', ['approved', 'done']).gte('checkout_date', today);
+  let query = supabase.from('approval_requests').select('*, approval_request_guests(*)').in('status', ['booked', 'approved', 'done']).gte('checkout_date', today);
   if (category) query = query.eq('team_category', category);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
@@ -716,7 +761,7 @@ app.post('/api/requests/:id/add-guests', async (req, res) => {
   if (!Array.isArray(guests) || !guests.length) return res.status(400).json({ error: 'ต้องระบุผู้เข้าพักที่จะเพิ่มอย่างน้อย 1 คน' });
   const { data: r } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
-  if (r.status !== 'done' && r.status !== 'approved') return res.status(400).json({ error: 'เพิ่มผู้เข้าพักได้เฉพาะรายการที่อนุมัติแล้วหรือจองสำเร็จแล้วเท่านั้น' });
+  if (!['booked', 'approved', 'done'].includes(r.status)) return res.status(400).json({ error: 'เพิ่มผู้เข้าพักได้เฉพาะรายการที่จองแล้ว อนุมัติแล้ว หรือสำเร็จแล้วเท่านั้น' });
 
   const existingCodes = new Set((r.approval_request_guests || []).map((g) => g.employee_code).filter(Boolean));
   const errors = [];
@@ -745,7 +790,7 @@ app.get('/api/analysis', async (req, res) => {
   const { data, error } = await supabase
     .from('approval_requests')
     .select('*, approval_request_guests(*)')
-    .in('status', ['pending', 'approved']);
+    .in('status', ['pending', 'booked', 'approved']);
   if (error) return res.status(500).json({ error: error.message });
   const reqs = await Promise.all(data.map(serializeRequest));
 
