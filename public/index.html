@@ -136,6 +136,15 @@
           <div id="farHotelsList" style="display:none;"></div>
           <div id="farReasonBox" style="display:none;"><span class="field-label">เหตุผลที่เลือกที่พักไกลกว่ารัศมี *</span><textarea id="fFarReason" rows="2" placeholder="เช่น ที่พักในรัศมีเต็มหมดช่วงวันหยุดยาว"></textarea></div>
           <div id="distanceMapBox"></div>
+
+          <button class="btn btn-ghost btn-sm" style="align-self:flex-start;" onclick="showAddHotelForm()">+ เพิ่มที่พักใหม่ (ไม่มีในระบบ)</button>
+          <div id="addHotelForm" class="add-guest-form" style="display:none;">
+            <input type="text" id="newHotelName" placeholder="ชื่อที่พัก">
+            <input type="text" id="newHotelCoords" placeholder="พิกัด เช่น 13.7563, 100.5018 (กดค้างที่หมุดใน Google Maps แล้วก็อบพิกัด)">
+            <input type="number" id="newHotelPrice" placeholder="ราคา/ห้อง/คืน">
+            <div id="addHotelError"></div>
+            <button class="btn btn-sm" onclick="addNewHotel()">เพิ่มที่พักนี้ และเลือกใช้เลย</button>
+          </div>
         </div>
 
         <div class="card step" id="dateStepCard" style="display:none;">
@@ -156,6 +165,7 @@
 
           <div class="guest-chip-row" id="guestChipRow"></div>
           <div class="note-box muted" id="guestSummary" style="display:none;"></div>
+          <div id="roomAssignBox" style="display:none;"></div>
 
           <button class="btn btn-ghost btn-sm" style="align-self:flex-start; margin-top:6px;" onclick="toggleOtherTeamSearch()">+ เพิ่มผู้เข้าพักจากทีมอื่น</button>
           <div id="otherTeamBox" style="display:none;">

@@ -7,7 +7,9 @@ let form = {
   musterPoints: [], chosenMuster: null,
   branch: null, branch2: null, musterCheck: null, hotelMaxKm: null,
   selectedHotels: [], guests: [], scheduleEntryId: null,
+  roomCount: null, roomAssignments: [],
 };
+let guestUidSeq = 1;
 let detailCtx = { backTarget: 'booker-home', readonly: false, requestId: null };
 
 const CATEGORY_LABEL = { activity: 'ทีมกิจกรรม', setup: 'ทีม setup' };
@@ -189,7 +191,7 @@ function logout() {
 // ===== booker home =====
 const STATUS_LABEL = {
   pending: ['รอ AREA จองที่พัก', 'pill-warning'], booked: ['จองแล้ว รอเจ้าของทีมอนุมัติ', 'pill-accent'],
-  approved: ['อนุมัติแล้ว รอแนบวอยเชอร์', 'pill-accent'],
+  approved: ['อนุมัติแล้ว รอแนบวอยเชอร์', 'pill-success'],
   done: ['จองสำเร็จ', 'pill-success'], rejected: ['ตีกลับ', 'pill-danger'],
 };
 let bookerAllReqs = [];
@@ -449,7 +451,7 @@ function scheduleMineItemHtml(it) {
 
 // ===== booker form =====
 function resetForm() {
-  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, branch2: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [], scheduleEntryId: null };
+  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, branch2: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [], scheduleEntryId: null, roomCount: null, roomAssignments: [] };
   el('formError').innerHTML = ''; el('hotelChipRow').innerHTML = ''; el('hotelPickError').textContent = '';
   el('fBranchSearch').value = ''; el('fBranchChosen').innerHTML = '';
   el('fCheckin').value = ''; el('fCheckout').value = '';
@@ -461,6 +463,7 @@ function resetForm() {
   ['branchStepCard', 'hotelStepCard', 'dateStepCard', 'guestStepCard'].forEach((id) => (el(id).style.display = 'none'));
   el('nearHotelsList').innerHTML = ''; el('farHotelsList').innerHTML = ''; el('farHotelsList').style.display = 'none';
   el('farReasonBox').style.display = 'none'; el('fFarReason').value = ''; el('distanceMapBox').innerHTML = '';
+  el('newHotelName').value = ''; el('newHotelCoords').value = ''; el('newHotelPrice').value = ''; el('addHotelForm').style.display = 'none'; el('addHotelError').innerHTML = '';
 
   const bookerCats = session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category);
   const seg = el('teamCatSeg');
@@ -754,6 +757,33 @@ el('fCheckin').addEventListener('change', checkDatesReady);
 el('fCheckout').addEventListener('change', checkDatesReady);
 function toggleFarHotels() { const box = el('farHotelsList'); box.style.display = box.style.display === 'none' ? 'block' : 'none'; }
 
+// ===== ที่พักที่ไม่มีในทะเบียน — เพิ่มเองด้วยชื่อ+พิกัด+ราคา แล้วเลือกใช้ในคำขอนี้ได้ทันที =====
+function showAddHotelForm() { el('addHotelForm').style.display = 'flex'; }
+async function addNewHotel() {
+  el('addHotelError').innerHTML = '';
+  const name = el('newHotelName').value.trim();
+  const coordsRaw = el('newHotelCoords').value.trim();
+  const price = el('newHotelPrice').value.trim();
+  if (!name) { el('addHotelError').innerHTML = errBox('ต้องใส่ชื่อที่พัก'); return; }
+  const m = coordsRaw.match(/(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) { el('addHotelError').innerHTML = errBox('พิกัดไม่ถูกต้อง — ใส่แบบ 13.7563, 100.5018'); return; }
+  if (!price) { el('addHotelError').innerHTML = errBox('ต้องใส่ราคาห้อง/คืน'); return; }
+  try {
+    const data = await api('/api/hotels/custom', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, lat: Number(m[1]), lng: Number(m[2]), price_per_night: Number(price), actor: session.employee.code }),
+    });
+    const h = data.hotel;
+    const distA = form.branch ? haversineKm(form.branch.lat, form.branch.lng, h.lat, h.lng) : null;
+    const distB = form.branch2 ? haversineKm(form.branch2.lat, form.branch2.lng, h.lat, h.lng) : null;
+    const distance_km = form.branch2 ? (distA != null && distB != null ? Math.round((distA + distB) * 10) / 10 : null) : distA;
+    el('newHotelName').value = ''; el('newHotelCoords').value = ''; el('newHotelPrice').value = ''; el('addHotelForm').style.display = 'none';
+    toggleHotelSelect({ ...h, distance_km, distance_km_a: distA, distance_km_b: distB });
+  } catch (e) {
+    el('addHotelError').innerHTML = errBox(e.message);
+  }
+}
+
 // ===== guests: click-to-add from own team roster, or search another team =====
 function isGuestSelected(code) { return form.guests.some((g) => g.employee_code === code); }
 
@@ -789,16 +819,20 @@ function renderStaffList(listEl, staff) {
 }
 function addGuestFromStaff(staff) {
   if (isGuestSelected(staff.code) || staff.openBooking) return;
-  form.guests.push({ employee_code: staff.code, name: staff.name, phone: staff.phone, gender: staff.gender, nickname: staff.nickname });
+  form.guests.push({ employee_code: staff.code, name: staff.name, phone: staff.phone, gender: staff.gender, nickname: staff.nickname, _uid: guestUidSeq++ });
   el('guestSearch').value = ''; el('guestAcList').style.display = 'none'; el('teamRosterList').style.display = 'none';
   renderGuestChips();
 }
-function removeGuest(idx) { form.guests.splice(idx, 1); renderGuestChips(); }
+function removeGuest(idx) {
+  const [removed] = form.guests.splice(idx, 1);
+  if (removed) form.roomAssignments.forEach((room) => { room.slots = room.slots.map((u) => (u === removed._uid ? null : u)); });
+  renderGuestChips();
+}
 function showAddGuestForm() { el('addGuestForm').style.display = 'flex'; }
 function addNewGuest() {
   const name = el('newGuestName').value.trim();
   if (!name) return;
-  form.guests.push({ employee_code: el('newGuestCode').value.trim() || null, name, gender: el('newGuestGender').value });
+  form.guests.push({ employee_code: el('newGuestCode').value.trim() || null, name, gender: el('newGuestGender').value, _uid: guestUidSeq++ });
   el('newGuestCode').value = ''; el('newGuestName').value = ''; el('addGuestForm').style.display = 'none';
   renderGuestChips();
 }
@@ -807,15 +841,98 @@ function renderGuestChips() {
     <div class="guest-chip">${avatarHtml(g.name, 22, g.gender)}${g.name}${g.nickname ? ' (' + g.nickname + ')' : ''}${!g.employee_code ? ' <span class="new-tag">ใหม่</span>' : ''}<span class="x" onclick="removeGuest(${i})">${icon('x', 12)}</span></div>`
   ).join('');
   updateGuestSummary();
+  renderRoomAssign();
 }
 function updateGuestSummary() {
   const box = el('guestSummary');
   if (!form.guests.length) { box.style.display = 'none'; return; }
   const male = form.guests.filter((g) => g.gender === 'M').length;
   const female = form.guests.filter((g) => g.gender === 'F').length;
-  const rooms = Math.ceil(male / 2) + Math.ceil(female / 2);
+  const rooms = roomsNeededFor(form.guests);
   box.style.display = 'block';
-  box.innerHTML = `<b>${form.guests.length} คน</b> (ชาย ${male} · หญิง ${female}) → ใช้ ${rooms} ห้อง`;
+  box.innerHTML = `<b>${form.guests.length} คน</b> (ชาย ${male} · หญิง ${female}) → อย่างน้อย ${rooms} ห้อง`;
+}
+
+// ===== room assignment (ห้อง 1-2 คนต่อห้อง, เพศเดียวกันเท่านั้น) =====
+function roomsNeededFor(guests) {
+  const male = guests.filter((g) => g.gender === 'M').length;
+  const female = guests.filter((g) => g.gender === 'F').length;
+  return Math.ceil(male / 2) + Math.ceil(female / 2);
+}
+function assignedGuestUids() {
+  const s = new Set();
+  form.roomAssignments.forEach((room) => room.slots.forEach((u) => { if (u != null) s.add(u); }));
+  return s;
+}
+function guestByUid(uid) { return form.guests.find((g) => g._uid === uid); }
+function roomNoForGuestUid(uid) {
+  for (let i = 0; i < form.roomAssignments.length; i++) {
+    if (form.roomAssignments[i].slots.includes(uid)) return i + 1;
+  }
+  return null;
+}
+function ensureRoomCount(min) {
+  if (form.roomCount == null || form.roomCount < min) form.roomCount = min;
+  while (form.roomAssignments.length < form.roomCount) form.roomAssignments.push({ slots: [null, null] });
+  while (form.roomAssignments.length > form.roomCount) form.roomAssignments.pop();
+}
+function setRoomCount(raw) {
+  const min = roomsNeededFor(form.guests);
+  let n = parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < min) n = min;
+  form.roomCount = n;
+  ensureRoomCount(min);
+  renderRoomAssign();
+}
+function setRoomSlot(roomIdx, slotIdx, rawUid) {
+  const uid = rawUid === '' ? null : Number(rawUid);
+  form.roomAssignments[roomIdx].slots[slotIdx] = uid;
+  if (slotIdx === 0 && uid == null) form.roomAssignments[roomIdx].slots[1] = null; // เคลียร์คนที่ 1 ต้องเคลียร์คนที่ 2 ด้วย เพราะล็อกเพศตามคนที่ 1
+  renderRoomAssign();
+}
+function renderRoomAssign() {
+  const box = el('roomAssignBox');
+  if (!form.guests.length) { box.style.display = 'none'; return; }
+  const min = roomsNeededFor(form.guests);
+  ensureRoomCount(min);
+  const assigned = assignedGuestUids();
+  const optionsFor = (room, slotIdx) => {
+    const currentUid = room.slots[slotIdx];
+    const firstGuest = room.slots[0] != null ? guestByUid(room.slots[0]) : null;
+    const lockedGender = slotIdx === 1 && firstGuest ? firstGuest.gender : null;
+    const opts = form.guests.filter((g) => {
+      if (g._uid === currentUid) return true;
+      if (assigned.has(g._uid)) return false;
+      if (lockedGender && g.gender !== lockedGender) return false;
+      return true;
+    });
+    const placeholder = slotIdx === 0 ? '— เลือกคนที่ 1 —' : '— ว่าง (ไม่มีคนพักคู่) —';
+    return `<option value="">${placeholder}</option>` + opts.map((g) =>
+      `<option value="${g._uid}" ${g._uid === currentUid ? 'selected' : ''}>${g.name}${g.nickname ? ' (' + g.nickname + ')' : ''} · ${g.gender === 'F' ? 'หญิง' : 'ชาย'}</option>`
+    ).join('');
+  };
+  const roomsHtml = form.roomAssignments.map((room, ri) => {
+    const firstGuest = room.slots[0] != null ? guestByUid(room.slots[0]) : null;
+    const genderTag = firstGuest ? ' · ' + (firstGuest.gender === 'F' ? 'หญิง' : 'ชาย') : '';
+    return `<div class="note-box muted" style="margin-top:8px;">
+      <b>ห้อง ${ri + 1}${genderTag}</b>
+      <div class="field-row" style="margin-top:4px;">
+        <select onchange="setRoomSlot(${ri},0,this.value)">${optionsFor(room, 0)}</select>
+        <select onchange="setRoomSlot(${ri},1,this.value)" ${room.slots[0] == null ? 'disabled' : ''}>${optionsFor(room, 1)}</select>
+      </div>
+    </div>`;
+  }).join('');
+  const doneCount = assigned.size;
+  const allDone = doneCount === form.guests.length;
+  box.style.display = 'block';
+  box.innerHTML = `
+    <div style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+      <span class="field-label" style="margin:0;">จำนวนห้องพัก</span>
+      <input type="number" min="${min}" value="${form.roomCount}" style="max-width:80px;" onchange="setRoomCount(this.value)">
+    </div>
+    <div class="note-box ${allDone ? 'success' : 'muted'}" style="margin-top:8px;"><b>จัดห้องพัก</b>จัดแล้ว ${doneCount}/${form.guests.length} คน${allDone ? '' : ' — ต้องจัดครบทุกคนก่อนส่งคำขอ'}</div>
+    ${roomsHtml}
+  `;
 }
 
 async function submitRequest() {
@@ -828,6 +945,11 @@ async function submitRequest() {
     el('formError').innerHTML = errBox('ต้องมีผู้เข้าพักอย่างน้อย 1 คน');
     return;
   }
+  const unassigned = form.guests.filter((g) => roomNoForGuestUid(g._uid) == null);
+  if (unassigned.length) {
+    el('formError').innerHTML = errBox(`ต้องจัดห้องพักให้ครบทุกคนก่อนส่งคำขอ (เหลือ ${unassigned.length} คน)`);
+    return;
+  }
   const body = {
     team_category: form.category, mission_type: form.missionType, team_code: form.teamCode,
     muster_name: form.chosenMuster?.muster_name || null,
@@ -836,7 +958,8 @@ async function submitRequest() {
     checkin_date: el('fCheckin').value, checkout_date: el('fCheckout').value,
     hotel_codes: form.selectedHotels.map((h) => h.code),
     far_reason: el('fFarReason').value.trim() || null,
-    created_by: session.employee.code, guests: form.guests,
+    created_by: session.employee.code,
+    guests: form.guests.map((g) => ({ employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender, room_no: roomNoForGuestUid(g._uid) })),
     schedule_entry_id: form.scheduleEntryId || null,
   };
   try {
@@ -890,14 +1013,28 @@ function detailHtml(r) {
     gate = `<div class="note-box muted"><b>ยังกดจองสำเร็จไม่ได้</b>ต้องรอผู้อนุมัติกดอนุมัติก่อน</div>`;
   }
   const kv = (icon, k, v) => `<div class="kv"><div class="ic">${icon}</div><div class="tx"><span class="k">${k}</span><span class="v">${v}</span></div></div>`;
-  const sortedGuests = sortByGender(r.guests);
-  const personBlocks = sortedGuests.map((g, i) => `
+  const personBlock = (g, i) => `
     <div class="person-block">
       <div class="person-head">${avatarHtml(g.name, 26, g.gender)}<b>คนที่ ${i + 1}${g.gender ? ' · ' + (g.gender === 'M' ? 'ชาย' : 'หญิง') : ''}</b></div>
       <div class="person-field"><div><span class="k">รหัสพนักงาน</span><span class="v">${g.employee_code || '-'}</span></div><button class="btn btn-sm" onclick='copyText(${JSON.stringify(g.employee_code || '-')}, this)'>${icon('copy', 14)}</button></div>
       <div class="person-field"><div><span class="k">ชื่อ-นามสกุล</span><span class="v" style="font-family:inherit;">${g.name}</span></div><button class="btn btn-sm" onclick='copyText(${JSON.stringify(g.name)}, this)'>${icon('copy', 14)}</button></div>
       <div class="person-field"><div><span class="k">เบอร์โทร</span><span class="v">${g.phone || '-'}</span></div><button class="btn btn-sm" onclick='copyText(${JSON.stringify(g.phone || '-')}, this)'>${icon('copy', 14)}</button></div>
-    </div>`).join('');
+    </div>`;
+  const groupedGuests = groupGuestsByRoom(r.guests);
+  let personBlocks;
+  if (!groupedGuests) {
+    personBlocks = sortByGender(r.guests).map(personBlock).join('');
+  } else {
+    let counter = 0;
+    const roomBlocks = groupedGuests.rooms.map((room) => {
+      const genderTag = room.members[0]?.gender ? ' · ' + (room.members[0].gender === 'M' ? 'ชาย' : 'หญิง') : '';
+      return `<div class="section-title" style="margin:10px 0 6px; font-size:12px;">ห้อง ${room.room_no}${genderTag}</div>${sortByGender(room.members).map((g) => personBlock(g, counter++)).join('')}`;
+    }).join('');
+    const unassignedBlock = groupedGuests.unassigned.length
+      ? `<div class="section-title" style="margin:10px 0 6px; font-size:12px;">ยังไม่ระบุห้อง</div>${sortByGender(groupedGuests.unassigned).map((g) => personBlock(g, counter++)).join('')}`
+      : '';
+    personBlocks = roomBlocks + unassignedBlock;
+  }
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
   const candDist = (h) => (r.branch?.lat != null && h.lat != null ? haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) : null);
   const isChosen = ['booked', 'approved', 'done'].includes(r.status);
@@ -913,7 +1050,7 @@ function detailHtml(r) {
     <button class="back-link" onclick="showView('${detailCtx.backTarget}')">‹ กลับ</button>
     <div class="page-head"><div><h2>รายละเอียดการจอง</h2><div class="sub">ใช้หน้านี้ก็อบข้อมูลไปกรอกจองในระบบ Choowap${!isChosen ? ' — ลองจองตามลำดับที่พักด้านล่าง ถ้าที่ 1 เต็มให้ลองที่ 2, 3 ต่อไป' : ''}</div></div><span class="pill ${cls}">${label}</span></div>
     <div class="copy-block">
-      <div class="copy-head"><span>ข้อมูลที่พัก / ทริป</span><button class="btn btn-sm" onclick='copyText(${JSON.stringify(`ประเภทงาน: ${r.mission_type}\nทีม: ${r.team_code}\nสาขา: ${r.branch?.name}\nที่พัก: ${hotelListText}\nเข้าพัก: ${r.checkin_date}\nเช็คเอาท์: ${r.checkout_date}\nจำนวนคืน: ${r.nights}\nจำนวนคน: ${r.guests.length}\nจำนวนห้อง: ${r.rooms}`)}, this)'>${icon('copy', 14)} ก็อบปี้</button></div>
+      <div class="copy-head"><span>ข้อมูลที่พัก / ทริป</span><button class="btn btn-sm" onclick='copyText(${JSON.stringify(`ประเภทงาน: ${r.mission_type}\nทีม: ${r.team_code}\nสาขา: ${r.branch?.name}\nที่พัก: ${hotelListText}\nเข้าพัก: ${r.checkin_date}\nเช็คเอาท์: ${r.checkout_date}\nจำนวนคืน: ${r.nights}\nจำนวนคน: ${r.guests.length}\nจำนวนห้อง: ${r.rooms}\n${guestsCopyLines(r)}`)}, this)'>${icon('copy', 14)} ก็อบปี้</button></div>
       <div class="kv-grid">
         ${kv(icon('briefcase', 16), 'ประเภทงาน', r.mission_type)}
         ${kv(icon('users', 16), 'ทีม', r.team_code || '-')}
@@ -1097,20 +1234,58 @@ function approverCardHtml(r) {
     <div class="trav-meta" style="border-top:none; padding-top:0;">${icon('hotel', 14)} ${r.hotel?.name || '-'}${r.branchHotelKm != null ? ' · ' + r.branchHotelKm + ' กม.จากสาขา' : ''}${dup}</div>
   </div>`;
 }
+// จัดกลุ่มผู้เข้าพักตามห้อง (room_no) ถ้ามีการระบุห้องไว้ — คำขอเก่าที่ยังไม่มี room_no เลย
+// (ทุกคน room_no เป็น null) จะคืน null ให้ผู้เรียกกลับไปแสดงเป็นรายชื่อเรียบเหมือนเดิม
+function groupGuestsByRoom(guests) {
+  if (!guests.some((g) => g.room_no != null)) return null;
+  const byRoom = new Map();
+  const unassigned = [];
+  guests.forEach((g) => {
+    if (g.room_no == null) { unassigned.push(g); return; }
+    if (!byRoom.has(g.room_no)) byRoom.set(g.room_no, []);
+    byRoom.get(g.room_no).push(g);
+  });
+  const rooms = [...byRoom.entries()].sort((a, b) => a[0] - b[0]).map(([room_no, members]) => ({ room_no, members }));
+  return { rooms, unassigned };
+}
+// ข้อความล้วนสำหรับก็อบวางในระบบ Choowap ตอนโทรจอง — จัดเป็นห้องๆ ถ้ามี room_no
+function guestsCopyLines(r) {
+  const grouped = groupGuestsByRoom(r.guests);
+  if (!grouped) return `ผู้เข้าพัก: ${r.guests.map((g) => g.name).join(', ')}`;
+  const lines = grouped.rooms.map((room) => {
+    const genderTag = room.members[0]?.gender ? (room.members[0].gender === 'M' ? ' (ชาย)' : ' (หญิง)') : '';
+    return `ห้อง ${room.room_no}${genderTag}: ${room.members.map((g) => g.name).join(', ')}`;
+  });
+  if (grouped.unassigned.length) lines.push(`ยังไม่ระบุห้อง: ${grouped.unassigned.map((g) => g.name).join(', ')}`);
+  return lines.join('\n');
+}
+function guestCardHtml(g, r) {
+  let pill = '<span class="pill pill-neutral">ไม่มีข้อมูลบ้านพนักงาน</span>';
+  if (g.hasHomeCoords) pill = g.homeDistanceKm < 10 ? `<span class="pill pill-warning">บ้านห่างแค่ ${g.homeDistanceKm} กม.</span>` : `<span class="pill pill-neutral">บ้านห่าง ${g.homeDistanceKm} กม.</span>`;
+  const dup = r.dupWarnings.find((d) => d.employee_code === g.employee_code);
+  return `<div class="trav-card" style="cursor:default;">
+      <div class="trav-top">${avatarHtml(g.name, 34, g.gender)}<div class="info"><h3>${g.name}</h3><div class="sub">${g.employee_code || 'เพิ่มใหม่'}${g.gender ? ' · ' + (g.gender === 'M' ? 'ชาย' : 'หญิง') : ''}</div></div>${dup ? '<span class="pill pill-danger">ชื่อซ้ำ</span>' : pill}</div>
+      ${dup ? `<div class="trav-meta" style="border-top:none; padding-top:0; color:var(--danger);">อยู่ในคำขอ "${dup.conflictBranch} ${dup.conflictDates}" ด้วย</div>` : ''}
+    </div>`;
+}
+function guestListHtml(r) {
+  const grouped = groupGuestsByRoom(r.guests);
+  if (!grouped) return `<div class="req-grid">${sortByGender(r.guests).map((g) => guestCardHtml(g, r)).join('')}</div>`;
+  const roomBlocks = grouped.rooms.map((room) => {
+    const genderTag = room.members[0]?.gender ? ' · ' + (room.members[0].gender === 'M' ? 'ชาย' : 'หญิง') : '';
+    return `<div class="section-title" style="margin:10px 0 6px; font-size:12px;">ห้อง ${room.room_no}${genderTag}</div><div class="req-grid">${sortByGender(room.members).map((g) => guestCardHtml(g, r)).join('')}</div>`;
+  }).join('');
+  const unassignedBlock = grouped.unassigned.length
+    ? `<div class="section-title" style="margin:10px 0 6px; font-size:12px;">ยังไม่ระบุห้อง</div><div class="req-grid">${sortByGender(grouped.unassigned).map((g) => guestCardHtml(g, r)).join('')}</div>`
+    : '';
+  return roomBlocks + unassignedBlock;
+}
 async function openApproverDetail(id) {
   const data = await api('/api/requests/' + id);
   const r = data.request;
   document.querySelector('[data-view="approver-queue-list"]').classList.remove('active');
   document.querySelector('[data-view="approver-detail-panel"]').classList.add('active');
-  const guestsHtml = sortByGender(r.guests).map((g) => {
-    let pill = '<span class="pill pill-neutral">ไม่มีข้อมูลบ้านพนักงาน</span>';
-    if (g.hasHomeCoords) pill = g.homeDistanceKm < 10 ? `<span class="pill pill-warning">บ้านห่างแค่ ${g.homeDistanceKm} กม.</span>` : `<span class="pill pill-neutral">บ้านห่าง ${g.homeDistanceKm} กม.</span>`;
-    const dup = r.dupWarnings.find((d) => d.employee_code === g.employee_code);
-    return `<div class="trav-card" style="cursor:default;">
-      <div class="trav-top">${avatarHtml(g.name, 34, g.gender)}<div class="info"><h3>${g.name}</h3><div class="sub">${g.employee_code || 'เพิ่มใหม่'}${g.gender ? ' · ' + (g.gender === 'M' ? 'ชาย' : 'หญิง') : ''}</div></div>${dup ? '<span class="pill pill-danger">ชื่อซ้ำ</span>' : pill}</div>
-      ${dup ? `<div class="trav-meta" style="border-top:none; padding-top:0; color:var(--danger);">อยู่ในคำขอ "${dup.conflictBranch} ${dup.conflictDates}" ด้วย</div>` : ''}
-    </div>`;
-  }).join('');
+  const guestsHtml = guestListHtml(r);
   let actions = '';
   if (r.status === 'pending') {
     actions = `<div class="note-box muted"><b>รอ AREA จองใน Choowap ก่อน</b>จะมาให้คุณอนุมัติหลัง AREA กด "จองแล้ว"</div>`;
@@ -1127,7 +1302,7 @@ async function openApproverDetail(id) {
       </div>
     </div>`;
   } else if (r.status === 'approved') {
-    actions = `<div class="note-box muted"><b>อนุมัติแล้ว</b>รอ AREA แนบวอยเชอร์เพื่อปิดงาน</div>`;
+    actions = `<div class="note-box success"><b>อนุมัติแล้ว</b>รอ AREA แนบวอยเชอร์เพื่อปิดงาน</div>`;
   } else if (r.status === 'done') {
     actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span>${voucherHtml(r.voucher_url)}</div>`;
   } else if (r.status === 'rejected') {
@@ -1150,7 +1325,7 @@ async function openApproverDetail(id) {
     ${r.muster ? `<div class="note-box muted" style="margin:10px 0;"><b>ระยะทาง</b>จุดรวมพล (${r.muster.name}) → สาขา ${r.musterBranchKm ?? '-'} กม. · สาขา → ที่พัก ${r.branchHotelKm ?? '-'} กม. · รวม ${r.totalKm?.toFixed ? r.totalKm.toFixed(1) : r.totalKm} กม.</div>` : ''}
     ${r.muster_reason ? `<div class="note-box" style="margin:10px 0;"><b>หมายเหตุระยะทางจุดรวมพล</b>${r.muster_reason}</div>` : ''}
     <div class="section-title" style="margin-bottom:10px; display:block;">ผู้เข้าพัก (${r.guests.length} คน · ${r.rooms} ห้อง)</div>
-    <div class="req-grid" style="margin-bottom:18px;">${guestsHtml}</div>
+    <div style="margin-bottom:18px;">${guestsHtml}</div>
     ${r.far_reason ? `<div class="note-box" style="margin-bottom:18px;"><b>เหตุผลเลือกที่พักนอกรัศมี</b>${r.far_reason}</div>` : ''}
     ${actions}`;
   renderApproverMap(r);

@@ -137,6 +137,25 @@ app.get('/api/mission-types', (req, res) => {
 // area (ชื่อเล่นไม่มีคำนำหน้า เช่น "พี่อิ๋ม" -> "อิ๋ม") ใช้จับคู่กับคอลัมน์ area_owner ที่ซิงค์มาจากชีต HR
 function bareNickname(nickname) { return String(nickname || '').replace(/^(พี่|คุณ|นาย|นาง|นางสาว)/, '').trim(); }
 
+// ตรวจ room_no ที่ส่งมาจากฟอร์ม — กันข้อมูลเพี้ยนจากฝั่ง client (ห้องเกิน 2 คน หรือเพศปนกันในห้อง
+// เดียวกัน) เพราะข้อมูลนี้ผูกกับการจองห้องจริง ไว้ใจฝั่ง client อย่างเดียวไม่ได้. คืน error message
+// (string) ถ้าไม่ผ่าน, คืน null ถ้าผ่าน. room_no เป็น null ได้ (ยังไม่จัดห้อง — เช่นแขกที่มาเพิ่มทีหลัง
+// ผ่าน add-guests ซึ่งยังไม่มี UI จัดห้องในตอนนี้)
+function validateRoomAssignments(guests) {
+  const byRoom = new Map();
+  for (const g of guests) {
+    if (g.room_no == null) continue;
+    if (!byRoom.has(g.room_no)) byRoom.set(g.room_no, []);
+    byRoom.get(g.room_no).push(g);
+  }
+  for (const [roomNo, members] of byRoom) {
+    if (members.length > 2) return `ห้อง ${roomNo} มีคนเกิน 2 คน`;
+    const genders = new Set(members.map((m) => m.gender));
+    if (genders.size > 1) return `ห้อง ${roomNo} มีทั้งชายและหญิงปนกัน (ต้องเพศเดียวกันเท่านั้น)`;
+  }
+  return null;
+}
+
 // ทีมที่ผู้จอง (Area) คนนี้มีสิทธิ์จองให้ได้ (ทีมที่ตัวเองดูแล + ทีมตัวเอง) — คืน null ถ้าไม่ใช่ผู้จอง (ไม่จำกัดทีม)
 function getOwnedTeams(actorCode, category) {
   const staff = ref.getStaff();
@@ -577,6 +596,11 @@ app.post('/api/requests', async (req, res) => {
     } catch (err) { errors.push('ตรวจสอบการจองซ้ำไม่สำเร็จ: ' + err.message); }
   }
 
+  if (Array.isArray(b.guests)) {
+    const roomErr = validateRoomAssignments(b.guests);
+    if (roomErr) errors.push(roomErr);
+  }
+
   if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
 
   const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link, stay_count: h.stay_count || 0 }));
@@ -604,7 +628,7 @@ app.post('/api/requests', async (req, res) => {
     notifyEmployee(approverRow.code, `📋 มีคำขอจองใหม่รออนุมัติ\nทีม ${b.team_code} · ${branch.name}\n${b.checkin_date} – ${b.checkout_date}`).catch((err) => console.error('[line-notify] แจ้งผู้อนุมัติไม่สำเร็จ:', err.message));
   }
 
-  const guestRows = b.guests.map((g) => ({ request_id: inserted.id, employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null }));
+  const guestRows = b.guests.map((g) => ({ request_id: inserted.id, employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null, room_no: g.room_no ?? null }));
   const { error: guestErr } = await supabase.from('approval_request_guests').insert(guestRows);
   if (guestErr) return res.status(500).json({ error: 'บันทึกรายชื่อผู้เข้าพักไม่สำเร็จ: ' + guestErr.message });
 
@@ -709,6 +733,18 @@ app.post('/api/requests/:id/finalize', upload.single('voucher'), async (req, res
   const candidates = r.hotel_candidates || [];
   const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
   if (!chosen) return res.status(400).json({ error: 'ต้องเลือกว่าได้ที่พักอันไหนจริงจากอันดับที่เลือกไว้' });
+
+  // เปลี่ยนที่พักไปจากที่ล็อกไว้ตอนอนุมัติได้ (เช่น ที่พักเต็มจริง) แต่จำกัดคนที่แก้ได้แค่เจ้าของทีม
+  // (ผู้อนุมัติ) หรือ AREA ที่ดูแลทีมนี้เท่านั้น — ยืนยันด้วยที่พักเดิมยังทำได้ตามปกติไม่ต้องเช็คสิทธิ์
+  // เพิ่ม เพราะเป็น flow ปกติที่ AREA แนบวอยเชอร์ทุกครั้งอยู่แล้ว
+  if (chosen.code !== r.hotel_code) {
+    const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
+    const ownedTeams = getOwnedTeams(actor, r.team_category);
+    const isOwningBooker = ownedTeams && ownedTeams.has(r.team_code);
+    if (!isApprover && !isOwningBooker) {
+      return res.status(403).json({ error: 'เปลี่ยนที่พักตอนนี้ได้เฉพาะเจ้าของทีมหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
+    }
+  }
   const finalConfirmationNo = String(confirmation_no || r.confirmation_no || '').trim();
   if (!finalConfirmationNo) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
 
@@ -775,9 +811,11 @@ app.post('/api/requests/:id/add-guests', async (req, res) => {
       }
     }
   } catch (err) { errors.push('ตรวจสอบการจองซ้ำไม่สำเร็จ: ' + err.message); }
+  const roomErr = validateRoomAssignments([...(r.approval_request_guests || []), ...guests]);
+  if (roomErr) errors.push(roomErr);
   if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
 
-  const guestRows = guests.map((g) => ({ request_id: Number(id), employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null }));
+  const guestRows = guests.map((g) => ({ request_id: Number(id), employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null, room_no: g.room_no ?? null }));
   const { error: insErr } = await supabase.from('approval_request_guests').insert(guestRows);
   if (insErr) return res.status(500).json({ error: 'เพิ่มผู้เข้าพักไม่สำเร็จ: ' + insErr.message });
 
@@ -948,12 +986,38 @@ app.get('/api/admin/hotels', requireApprover, async (req, res) => {
   res.json({ hotels: data });
 });
 
+// เพิ่มที่พักที่ไม่มีในทะเบียนเข้าระบบเอง (ผู้จองหรือพนักงานทำตอนกำลังเลือกที่พักในฟอร์มจอง) — ใส่แค่ชื่อ+พิกัด+ราคา
+// แล้วเลือกใช้ในคำขอนี้ได้ทันที ระบบคิดระยะทางให้เหมือนที่พักในทะเบียนทุกอย่างเพราะใช้พิกัดคำนวณ haversine เหมือนกัน
+// ตั้ง is_custom ไว้เพื่อกันไม่ให้ "นำเข้าที่พัก" (แทนที่ทั้งทะเบียนด้วยไฟล์ Excel) ลบรายการนี้ทิ้งไปด้วย
+app.post('/api/hotels/custom', async (req, res) => {
+  const { name, lat, lng, price_per_night, actor } = req.body;
+  const errors = [];
+  if (!String(name || '').trim()) errors.push('ต้องระบุชื่อที่พัก');
+  const latNum = Number(lat), lngNum = Number(lng);
+  if (!Number.isFinite(latNum) || !Number.isFinite(lngNum)) errors.push('พิกัดไม่ถูกต้อง');
+  const priceNum = Number(price_per_night);
+  if (!Number.isFinite(priceNum) || priceNum <= 0) errors.push('ต้องระบุราคาห้อง/คืน');
+  if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
+
+  const code = 'CUSTOM' + Date.now().toString(36).toUpperCase();
+  const row = {
+    code, name: String(name).trim(), lat: latNum, lng: lngNum, price_per_night: priceNum,
+    map_link: `https://www.google.com/maps?q=${latNum},${lngNum}`,
+    is_active: true, is_custom: true, added_by: actor || null,
+  };
+  const { data, error } = await supabase.from('approval_hotels').insert(row).select().single();
+  if (error) return res.status(500).json({ error: 'เพิ่มที่พักไม่สำเร็จ: ' + error.message });
+  await ref.refreshCacheOnly();
+  res.status(201).json({ hotel: data });
+});
+
 app.post('/api/admin/import-hotels', upload.single('file'), requireApprover, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'ไม่พบไฟล์ที่อัพโหลด' });
   let hotels;
   try { hotels = parseHotelWorkbook(req.file.buffer); } catch (err) { return res.status(400).json({ error: 'อ่านไฟล์ไม่สำเร็จ: ' + err.message }); }
   if (!hotels.length) return res.status(400).json({ error: 'ไม่พบข้อมูลที่พักในไฟล์นี้ (ตรวจรูปแบบคอลัมน์)' });
-  const { error: delErr } = await supabase.from('approval_hotels').delete().neq('code', '__none__');
+  // ลบเฉพาะที่พักจากทะเบียนเดิม ไม่แตะที่พักที่พนักงาน/ผู้จองเพิ่มเองระหว่างทาง (is_custom) กันหายตอนนำเข้าทับ
+  const { error: delErr } = await supabase.from('approval_hotels').delete().eq('is_custom', false);
   if (delErr) return res.status(500).json({ error: 'ลบข้อมูลเดิมไม่สำเร็จ: ' + delErr.message });
   for (let i = 0; i < hotels.length; i += 500) {
     const { error } = await supabase.from('approval_hotels').insert(hotels.slice(i, i + 500));
