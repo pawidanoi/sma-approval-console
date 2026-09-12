@@ -1550,7 +1550,8 @@ function fmtSyncTime(iso) {
 async function loadStaffSyncStatus() {
   try {
     const s = await api('/api/admin/staff-sync-status?actor=' + encodeURIComponent(session.employee.code));
-    el('staffSyncStatusText').textContent = s.error ? `ซิงค์ล้มเหลว: ${s.error}` : `${fmtSyncTime(s.at)} (${s.count ?? '-'} คน)`;
+    const line = (label, st) => `${label}: ${st.error ? 'ซิงค์ล้มเหลว: ' + st.error : `${fmtSyncTime(st.at)} (${st.count ?? '-'} คน)`}`;
+    el('staffSyncStatusText').textContent = `${line('ทีมกิจกรรม', s.activity)} · ${line('ทีม setup', s.setup)}`;
   } catch (e) { el('staffSyncStatusText').textContent = 'เช็คสถานะไม่สำเร็จ'; }
 }
 async function syncStaffNow() {

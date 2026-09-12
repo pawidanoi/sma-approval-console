@@ -161,6 +161,8 @@ function getOwnedTeams(actorCode, category) {
   const staff = ref.getStaff();
   const actorRow = staff.find((s) => s.code === actorCode && s.category === category);
   if (!actorRow || actorRow.role !== 'ผู้จอง') return null;
+  // ทีม setup ไม่แบ่งเขตเหมือนทีมกิจกรรม — AREA คนไหนก็จองแทนได้ทุกทีมสนามในสายนี้
+  if (category === 'setup') return new Set(staff.filter((s) => s.category === category).map((s) => s.team_code));
   const actorNick = bareNickname(actorRow.nickname);
   const ownedTeams = new Set(staff.filter((s) => s.category === category && s.area_owner && bareNickname(s.area_owner) === actorNick).map((s) => s.team_code));
   if (actorRow.team_code) ownedTeams.add(actorRow.team_code);
@@ -184,10 +186,8 @@ app.get('/api/teams', (req, res) => {
   // ผู้จอง (Area) เห็นเฉพาะทีมที่ตัวเองดูแล + ทีมของตัวเอง — กันจองสลับทีมกันเอง
   // พนักงานทั่วไป (หรือใครก็ตามที่ไม่ใช่ผู้จอง) เห็นแค่ทีมตัวเองทีมเดียว — จองแทนทีมอื่นไม่ได้
   const actorRow = actor ? rows.find((s) => s.code === actor) : null;
-  if (actorRow && actorRow.role === 'ผู้จอง') {
-    const actorNick = bareNickname(actorRow.nickname);
-    const ownedTeams = new Set(rows.filter((s) => s.area_owner && bareNickname(s.area_owner) === actorNick).map((s) => s.team_code));
-    if (actorRow.team_code) ownedTeams.add(actorRow.team_code);
+  const ownedTeams = actor && category ? getOwnedTeams(actor, category) : null;
+  if (ownedTeams) {
     rows = rows.filter((s) => ownedTeams.has(s.team_code));
   } else if (actorRow) {
     rows = rows.filter((s) => s.team_code === actorRow.team_code);
@@ -559,10 +559,8 @@ app.post('/api/requests', async (req, res) => {
   // พนักงานทั่วไป (ไม่ใช่ผู้จอง) จองได้แค่ทีมตัวเองทีมเดียว
   if (b.created_by && b.team_code) {
     const creatorRow = ref.getStaff().find((s) => s.code === b.created_by && s.category === b.team_category);
-    if (creatorRow && creatorRow.role === 'ผู้จอง') {
-      const creatorNick = bareNickname(creatorRow.nickname);
-      const ownedTeams = new Set(ref.getStaff().filter((s) => s.category === b.team_category && s.area_owner && bareNickname(s.area_owner) === creatorNick).map((s) => s.team_code));
-      if (creatorRow.team_code) ownedTeams.add(creatorRow.team_code);
+    const ownedTeams = creatorRow ? getOwnedTeams(b.created_by, b.team_category) : null;
+    if (ownedTeams) {
       if (!ownedTeams.has(b.team_code)) errors.push('คุณไม่มีสิทธิ์จองให้ทีมนี้ (ไม่ใช่ทีมที่ดูแลหรือทีมตัวเอง)');
     } else if (creatorRow) {
       if (b.team_code !== creatorRow.team_code) errors.push('คุณจองได้เฉพาะทีมของตัวเองเท่านั้น');
