@@ -981,16 +981,6 @@ async function openDetail(id, backTarget, readonly) {
   el('detailRoot').innerHTML = detailHtml(data.request);
   showView('booking-detail');
 }
-async function deleteRequestFromDetail(id) {
-  const ok = await confirmDialog('ลบคำขอนี้ทิ้งถาวร ข้อมูลผู้เข้าพักและการจองทั้งหมดในคำขอนี้จะหายไป ยืนยันลบ?');
-  if (!ok) return;
-  try {
-    await api(`/api/requests/${id}?actor=${encodeURIComponent(session.employee.code)}`, { method: 'DELETE' });
-  } catch (e) { await alertDialog(e.message); return; }
-  showView(detailCtx.backTarget === 'approver-queue' ? 'approver-queue' : 'booker-home');
-  if (currentRole === 'booker') loadBookerHome();
-  if (currentRole === 'approver') loadApproverQueue();
-}
 // วอยเชอร์เป็นได้ทั้งรูป (แสดงตัวอย่างในหน้าได้เลย) หรือ PDF (โชว์ตัวอย่างในหน้าไม่ได้ ให้ลิงก์เปิดแทน)
 function voucherHtml(url) {
   if (!url) return '';
@@ -1076,8 +1066,7 @@ function detailHtml(r) {
     ${r.muster ? `<div class="note-box muted" style="margin-top:12px;"><b>ระยะทาง</b>จุดรวมพล (${r.muster.name}) → สาขา ${r.musterBranchKm ?? '-'} กม. · สาขา → ที่พัก ${r.branchHotelKm ?? '-'} กม. · รวม ${r.totalKm?.toFixed ? r.totalKm.toFixed(1) : r.totalKm} กม.</div>` : ''}
     <div class="section-title" style="margin:14px 0 10px; display:block;">ข้อมูลผู้เข้าพัก · ก็อบทีละคน</div>
     <div class="req-grid" style="grid-template-columns:1fr; gap:10px;">${personBlocks}</div>
-    <div style="margin-top:16px;">${gate}</div>
-    ${!detailCtx.readonly && r.status !== 'done' ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger); margin-top:8px;" onclick="deleteRequestFromDetail(${r.id})">${icon('x', 14)} ลบคำขอนี้ทิ้ง</button>` : ''}`;
+    <div style="margin-top:16px;">${gate}</div>`;
 }
 let completeChosenHotel = null;
 let completeCandidates = [];
