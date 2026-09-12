@@ -191,7 +191,7 @@ function logout() {
 // ===== booker home =====
 const STATUS_LABEL = {
   pending: ['รอ AREA จองที่พัก', 'pill-warning'], booked: ['จองแล้ว รอเจ้าของทีมอนุมัติ', 'pill-accent'],
-  approved: ['อนุมัติแล้ว รอแนบวอยเชอร์', 'pill-success'],
+  approved: ['อนุมัติแล้ว รอ AREA ยืนยันปิดงาน', 'pill-success'],
   done: ['จองสำเร็จ', 'pill-success'], rejected: ['ตีกลับ', 'pill-danger'],
 };
 let bookerAllReqs = [];
@@ -215,7 +215,7 @@ function renderBookerList() {
   reqs.forEach((r) => counts[r.status]++);
   const tile = (status, iconName, label) => `<div class="snap" style="cursor:pointer; ${bookerStatusFilter === status ? 'border-color:var(--accent); box-shadow:var(--shadow);' : ''}" onclick="filterBookerByStatus('${status}')"><div class="ic">${icon(iconName, 20)}</div><div class="tx"><b class="num">${counts[status]}</b><span>${label}</span></div></div>`;
   el('bookerStats').innerHTML =
-    tile('pending', 'clock', 'รอ AREA จอง') + tile('booked', 'package', 'จองแล้ว รอเจ้าของทีมอนุมัติ') + tile('approved', 'package', 'อนุมัติแล้ว รอแนบวอยเชอร์') +
+    tile('pending', 'clock', 'รอ AREA จอง') + tile('booked', 'package', 'จองแล้ว รอเจ้าของทีมอนุมัติ') + tile('approved', 'package', 'อนุมัติแล้ว รอ AREA ยืนยันปิดงาน') +
     tile('done', 'check', 'จองสำเร็จ') + tile('rejected', 'undo', 'ถูกตีกลับ');
 
   let shown, emptyKind, emptyTitle, emptySub;
@@ -1002,19 +1002,19 @@ function voucherHtml(url) {
 }
 function detailHtml(r) {
   const [label, cls] = STATUS_LABEL[r.status];
-  const doneNote = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span>${voucherHtml(r.voucher_url)}</div>`;
+  const doneNote = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>${r.confirmation_no ? `เลขยืนยัน <span class="num">${r.confirmation_no}</span>` : ''}${voucherHtml(r.voucher_url)}</div>`;
   let gate = '';
   if (detailCtx.readonly) {
     if (r.status === 'done') gate = doneNote;
     else if (r.status === 'booked') gate = `<div class="note-box muted"><b>จองแล้ว รอเจ้าของทีมอนุมัติ</b>ดูได้อย่างเดียว</div>`;
-    else if (r.status === 'approved') gate = `<div class="note-box muted"><b>อนุมัติแล้ว รอ AREA แนบวอยเชอร์</b>ดูได้อย่างเดียว</div>`;
+    else if (r.status === 'approved') gate = `<div class="note-box muted"><b>อนุมัติแล้ว รอ AREA ยืนยันปิดงาน</b>ดูได้อย่างเดียว</div>`;
     else gate = `<div class="note-box muted"><b>ยังไม่จองสำเร็จ</b>ดูได้อย่างเดียว</div>`;
   } else if (r.status === 'pending') {
     gate = `<button class="btn btn-success btn-block" onclick="openBook(${r.id})">${icon('check', 16)} เลือกที่พักที่จะจอง → ส่งให้อนุมัติ</button>`;
   } else if (r.status === 'booked') {
     gate = `<div class="note-box muted"><b>จองแล้ว</b>รอเจ้าของทีมอนุมัติ — ที่พัก <b>${r.hotel?.name || '-'}</b></div>`;
   } else if (r.status === 'approved') {
-    gate = `<button class="btn btn-success btn-block" onclick="openFinalize(${r.id})">${icon('check', 16)} แนบวอยเชอร์ → ปิดงาน</button>`;
+    gate = `<button class="btn btn-success btn-block" onclick="openFinalize(${r.id})">${icon('check', 16)} ยืนยันที่พัก → ปิดงาน</button>`;
   } else if (r.status === 'done') {
     gate = doneNote;
   } else if (r.status === 'rejected') {
@@ -1128,7 +1128,7 @@ async function submitBook(id) {
     el('completeError').innerHTML = errBox(e.message);
   }
 }
-// ขั้นที่ 2: หลังเจ้าของทีมอนุมัติแล้ว AREA ยืนยันที่พักอีกครั้ง (แก้ได้ถ้าเปลี่ยน) + แนบรูปวอยเชอร์ (approved -> done)
+// ขั้นที่ 2: หลังเจ้าของทีมอนุมัติแล้ว AREA แค่ยืนยันที่พักที่ได้จริงอีกครั้ง (แก้ได้ถ้าเปลี่ยน) แล้วปิดงาน (approved -> done)
 let finalizeChosenHotel = null;
 let finalizeCandidates = [];
 async function openFinalize(id) {
@@ -1142,17 +1142,15 @@ async function openFinalize(id) {
     <div class="card" style="border-color:var(--success); background:var(--success-soft); display:flex; flex-direction:column; gap:12px;">
       <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:2px;">
         ${EMPTY_ILLUSTRATIONS.allDone}
-        <div class="section-title" style="color:var(--success-deep);">เจ้าของทีมอนุมัติแล้ว — ยืนยันที่พักอีกครั้ง แล้วแนบวอยเชอร์เพื่อปิดงาน</div>
+        <div class="section-title" style="color:var(--success-deep);">เจ้าของทีมอนุมัติแล้ว — ยืนยันที่พักที่ได้จริงเพื่อปิดงาน</div>
         <p style="font-size:12.5px; color:var(--ink-soft); margin:0;">${r.branch?.name} · ${r.checkin_date} – ${r.checkout_date}</p>
       </div>
       <div>
         <span class="field-label">ที่พักที่จองได้จริง (แก้ได้ถ้าเปลี่ยน)</span>
         <div id="finalizeHotelList">${candidates.map((h, i) => finalizeHotelRowHtml(h, i)).join('')}</div>
       </div>
-      <div><span class="field-label">เลขยืนยันจากโรงแรม *</span><input type="text" id="finalizeConfirmNo" placeholder="เช่น RSV-88213" value="${r.confirmation_no || ''}" style="border-color:var(--success);"></div>
-      <div><span class="field-label">วอยเชอร์จาก Choowap (รูปหรือ PDF) *</span><input type="file" id="voucherFile" accept="image/*,application/pdf"></div>
       <div id="finalizeError"></div>
-      <button class="btn btn-success btn-block" onclick="submitFinalize(${id})">บันทึกจองสำเร็จ</button>
+      <button class="btn btn-success btn-block" onclick="submitFinalize(${id})">ยืนยันที่พัก → ปิดงาน</button>
     </div>`;
   showView('booking-complete');
 }
@@ -1169,18 +1167,12 @@ function chooseFinalizeHotel(code) {
   el('finalizeHotelList').innerHTML = finalizeCandidates.map((h, i) => finalizeHotelRowHtml(h, i)).join('');
 }
 async function submitFinalize(id) {
-  const confirmation_no = el('finalizeConfirmNo').value.trim();
-  const voucherFile = el('voucherFile').files[0];
   if (!finalizeChosenHotel) { el('finalizeError').innerHTML = errBox('ต้องเลือกว่าได้ที่พักอันไหนจริง'); return; }
-  if (!confirmation_no) { el('finalizeError').innerHTML = errBox('ต้องใส่เลขยืนยันจากโรงแรม'); return; }
-  if (!voucherFile) { el('finalizeError').innerHTML = errBox('ต้องแนบวอยเชอร์จาก Choowap (รูปหรือ PDF)'); return; }
   try {
-    const body = new FormData();
-    body.append('actor', session.employee.code);
-    body.append('confirmation_no', confirmation_no);
-    body.append('chosen_hotel_code', finalizeChosenHotel);
-    body.append('voucher', voucherFile);
-    await api('/api/requests/' + id + '/finalize', { method: 'POST', body });
+    await api('/api/requests/' + id + '/finalize', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actor: session.employee.code, chosen_hotel_code: finalizeChosenHotel }),
+    });
     showView(detailCtx.backTarget === 'approver-queue' ? 'approver-queue' : 'booker-home');
     if (currentRole === 'booker') loadBookerHome();
     if (currentRole === 'approver') loadApproverQueue();
@@ -1214,7 +1206,7 @@ function renderApproverList() {
   reqs.forEach((r) => counts[r.status]++);
   const tile = (status, iconName, label) => `<div class="snap" style="cursor:pointer; ${approverStatusFilter === status ? 'border-color:var(--accent); box-shadow:var(--shadow);' : ''}" onclick="filterApproverByStatus('${status}')"><div class="ic">${icon(iconName, 20)}</div><div class="tx"><b class="num">${counts[status]}</b><span>${label}</span></div></div>`;
   el('approverStats').innerHTML =
-    tile('booked', 'clock', 'รอคุณอนุมัติ') + tile('pending', 'package', 'รอ AREA จอง') + tile('approved', 'package', 'รอ AREA แนบวอยเชอร์') +
+    tile('booked', 'clock', 'รอคุณอนุมัติ') + tile('pending', 'package', 'รอ AREA จอง') + tile('approved', 'package', 'รอ AREA ยืนยันปิดงาน') +
     tile('done', 'check', 'จองสำเร็จ') + tile('rejected', 'undo', 'ตีกลับ');
 
   let shown, emptyKind, emptyTitle, emptySub;
@@ -1313,9 +1305,9 @@ async function openApproverDetail(id) {
       </div>
     </div>`;
   } else if (r.status === 'approved') {
-    actions = `<div class="note-box success"><b>อนุมัติแล้ว</b>รอ AREA แนบวอยเชอร์เพื่อปิดงาน</div>`;
+    actions = `<div class="note-box success"><b>อนุมัติแล้ว</b>รอ AREA ยืนยันปิดงาน</div>`;
   } else if (r.status === 'done') {
-    actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>เลขยืนยัน <span class="num">${r.confirmation_no}</span>${voucherHtml(r.voucher_url)}</div>`;
+    actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>${r.confirmation_no ? `เลขยืนยัน <span class="num">${r.confirmation_no}</span>` : ''}${voucherHtml(r.voucher_url)}</div>`;
   } else if (r.status === 'rejected') {
     actions = `<div class="note-box danger"><b>ตีกลับแล้ว</b>${r.reject_reason || ''}</div>`;
   }

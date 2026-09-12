@@ -756,14 +756,14 @@ app.delete('/api/requests/:id', async (req, res) => {
   res.json({ ok: true });
 });
 
-// ขั้นตอนสุดท้ายหลังเจ้าของทีมอนุมัติการจองแล้ว — AREA ยืนยันที่พักอีกครั้ง (แก้ได้ถ้าเปลี่ยน) พร้อมแนบรูปวอยเชอร์จาก Choowap
-app.post('/api/requests/:id/finalize', upload.single('voucher'), async (req, res) => {
+// ขั้นตอนสุดท้ายหลังเจ้าของทีมอนุมัติการจองแล้ว — AREA แค่ยืนยันที่พักที่ได้จริงอีกครั้ง (แก้ได้ถ้าเปลี่ยน)
+// ไม่ต้องแนบวอยเชอร์/เลขยืนยันแล้ว (ตัดออกตามคำขอ — เดิมบังคับแนบรูปวอยเชอร์+เลขยืนยันก่อนปิดงานได้)
+app.post('/api/requests/:id/finalize', async (req, res) => {
   const id = req.params.id;
-  const { actor, confirmation_no, chosen_hotel_code } = req.body;
+  const { actor, chosen_hotel_code } = req.body;
   const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
-  if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องรอเจ้าของทีมอนุมัติการจองก่อนถึงจะแนบวอยเชอร์ได้' });
-  if (!req.file) return res.status(400).json({ error: 'ต้องแนบรูปวอยเชอร์จาก Choowap' });
+  if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องรอเจ้าของทีมอนุมัติการจองก่อนถึงจะยืนยันปิดงานได้' });
 
   const candidates = r.hotel_candidates || [];
   const chosen = candidates.find((h) => h.code === chosen_hotel_code) || candidates.find((h) => h.code === r.hotel_code);
@@ -771,7 +771,7 @@ app.post('/api/requests/:id/finalize', upload.single('voucher'), async (req, res
 
   // เปลี่ยนที่พักไปจากที่ล็อกไว้ตอนอนุมัติได้ (เช่น ที่พักเต็มจริง) แต่จำกัดคนที่แก้ได้แค่เจ้าของทีม
   // (ผู้อนุมัติ) หรือ AREA ที่ดูแลทีมนี้เท่านั้น — ยืนยันด้วยที่พักเดิมยังทำได้ตามปกติไม่ต้องเช็คสิทธิ์
-  // เพิ่ม เพราะเป็น flow ปกติที่ AREA แนบวอยเชอร์ทุกครั้งอยู่แล้ว
+  // เพิ่ม เพราะเป็น flow ปกติที่ AREA ยืนยันปิดงานทุกครั้งอยู่แล้ว
   if (chosen.code !== r.hotel_code) {
     const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
     const ownedTeams = getOwnedTeams(actor, r.team_category);
@@ -780,18 +780,9 @@ app.post('/api/requests/:id/finalize', upload.single('voucher'), async (req, res
       return res.status(403).json({ error: 'เปลี่ยนที่พักตอนนี้ได้เฉพาะเจ้าของทีมหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
     }
   }
-  const finalConfirmationNo = String(confirmation_no || r.confirmation_no || '').trim();
-  if (!finalConfirmationNo) return res.status(400).json({ error: 'ต้องใส่เลขยืนยันจากโรงแรม' });
-
-  const ext = (req.file.mimetype.split('/')[1] || 'jpg').replace('jpeg', 'jpg');
-  const storagePath = `${id}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
-  const { error: upErr } = await supabase.storage.from('booking-vouchers').upload(storagePath, req.file.buffer, { contentType: req.file.mimetype });
-  if (upErr) return res.status(500).json({ error: 'อัพโหลดวอยเชอร์ไม่สำเร็จ: ' + upErr.message });
-  const { data: pub } = supabase.storage.from('booking-vouchers').getPublicUrl(storagePath);
 
   const update = {
     status: 'done', done_by: actor, done_at: new Date().toISOString(),
-    confirmation_no: finalConfirmationNo, voucher_url: pub.publicUrl,
     hotel_code: chosen.code, hotel_name: chosen.name, hotel_lat: chosen.lat, hotel_lng: chosen.lng,
     hotel_price_per_night: chosen.price_per_night, hotel_map_link: chosen.map_link,
   };
