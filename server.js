@@ -483,7 +483,7 @@ app.get('/api/staff', async (req, res) => {
 });
 
 // ---------- requests ----------
-async function computeDupWarnings(requestId, guests) {
+async function computeDupWarnings(requestId, guests, checkin, checkout) {
   const warnings = [];
   for (const g of guests) {
     if (!g.employee_code) continue;
@@ -493,8 +493,12 @@ async function computeDupWarnings(requestId, guests) {
       .eq('employee_code', g.employee_code)
       .neq('request_id', requestId)
       .in('approval_requests.status', ['pending', 'booked', 'approved']);
-    if (rows && rows.length) {
-      const o = rows[0].approval_requests;
+    // เดิมไม่เช็ควันที่เลย แค่เจอชื่อซ้ำในคำขออื่นก็ตีเป็น "ชื่อซ้ำ" ทันที ทำให้คนที่ไปงานติดกัน
+    // (เช่น เช็คเอาท์ 17 แล้วเช็คอินงานถัดไปวันที่ 17 เลย) โดนแจ้งเตือนซ้ำผิดๆ ทั้งที่วันที่ไม่ชนกันจริง
+    // — กรองด้วย datesOverlap เหมือน getOpenBookingConflict ก่อนถือว่าเป็นการชนกันจริง
+    const hit = (rows || []).find((row) => datesOverlap(checkin, checkout, row.approval_requests.checkin_date, row.approval_requests.checkout_date));
+    if (hit) {
+      const o = hit.approval_requests;
       warnings.push({ employee_code: g.employee_code, name: g.name, conflictBranch: o.branch_name, conflictDates: `${o.checkin_date} – ${o.checkout_date}` });
     }
   }
@@ -507,7 +511,7 @@ async function serializeRequest(r) {
   const musterBranchKm = r.muster_lat != null ? haversineKm(r.muster_lat, r.muster_lng, r.branch_lat, r.branch_lng) : null;
   const totalKm = (musterBranchKm != null ? musterBranchKm : 0) + (branchHotelKm != null ? branchHotelKm : 0);
   const nights = Math.round((new Date(r.checkout_date) - new Date(r.checkin_date)) / 86400000);
-  const dupWarnings = await computeDupWarnings(r.id, guests);
+  const dupWarnings = await computeDupWarnings(r.id, guests, r.checkin_date, r.checkout_date);
   const creator = ref.getStaff().find((s) => s.code === r.created_by);
   return {
     ...r,
@@ -725,6 +729,31 @@ app.patch('/api/requests/:id', async (req, res) => {
   if (updErr) return res.status(500).json({ error: updErr.message });
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
   res.json({ request: await serializeRequest(full) });
+});
+
+// ลบคำขอทิ้งทั้งรายการ (ไม่ใช่แค่ตีกลับ) — สำหรับคำขอที่สร้างผิด/ซ้ำซ้อน ต้องเอาออกจากระบบจริงๆ
+// จำกัดสิทธิ์เหมือนจุดเปลี่ยนที่พักตอน finalize: ผู้อนุมัติของทีมนั้น หรือ AREA ที่ดูแลทีมนั้นเท่านั้น
+// ห้ามลบสถานะ 'done' เพราะมีวอยเชอร์/เลขยืนยันจริงแล้ว ถือเป็นประวัติการจองที่เกิดขึ้นจริง (ต้องเก็บไว้)
+app.delete('/api/requests/:id', async (req, res) => {
+  const id = req.params.id;
+  const actor = String(req.query.actor || req.body?.actor || '').trim();
+  const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
+  if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
+  if (r.status === 'done') return res.status(400).json({ error: 'ลบไม่ได้เพราะจองสำเร็จแล้ว (มีวอยเชอร์/เลขยืนยันจริง) ถือเป็นประวัติการจอง' });
+
+  const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
+  const ownedTeams = getOwnedTeams(actor, r.team_category);
+  const isOwningBooker = ownedTeams && ownedTeams.has(r.team_code);
+  if (!isApprover && !isOwningBooker) {
+    return res.status(403).json({ error: 'ลบคำขอได้เฉพาะผู้อนุมัติหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
+  }
+
+  await supabase.from('approval_request_guests').delete().eq('request_id', id);
+  // คืนแผนงานที่เคยผูกกับคำขอนี้กลับไปเป็น "ยังไม่จอง" แทนที่จะหายไปเงียบๆ
+  await supabase.from('approval_schedule_entries').update({ matched_request_id: null }).eq('matched_request_id', id);
+  const { error: delErr } = await supabase.from('approval_requests').delete().eq('id', id);
+  if (delErr) return res.status(500).json({ error: delErr.message });
+  res.json({ ok: true });
 });
 
 // ขั้นตอนสุดท้ายหลังเจ้าของทีมอนุมัติการจองแล้ว — AREA ยืนยันที่พักอีกครั้ง (แก้ได้ถ้าเปลี่ยน) พร้อมแนบรูปวอยเชอร์จาก Choowap
