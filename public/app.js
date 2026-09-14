@@ -8,6 +8,7 @@ let form = {
   branch: null, branch2: null, musterCheck: null, hotelMaxKm: null,
   selectedHotels: [], guests: [], scheduleEntryId: null,
   roomCount: null, roomAssignments: [],
+  editingRequestId: null, editingBackTarget: null,
 };
 let guestUidSeq = 1;
 let detailCtx = { backTarget: 'booker-home', readonly: false, requestId: null };
@@ -254,7 +255,10 @@ function bookerCategory() {
 }
 function vacancyCategory() { return currentRole === 'approver' ? approverCategory : bookerCategory(); }
 function backFromVacancy() { showView(currentRole === 'approver' ? 'approver-queue' : 'booker-home'); }
-function backFromBookerForm() { showView(currentRole === 'employee' ? 'employee-view' : 'booker-home'); }
+function backFromBookerForm() {
+  if (form.editingRequestId && form.editingBackTarget === 'approver') { loadApproverQueue().then(() => openApproverDetail(form.editingRequestId)); return; }
+  showView(currentRole === 'employee' ? 'employee-view' : 'booker-home');
+}
 let vacancyReqs = [];
 async function loadVacancyList() {
   const data = await api('/api/vacancies?category=' + encodeURIComponent(vacancyCategory()));
@@ -381,6 +385,61 @@ async function bookFromSchedule(item) {
   checkDatesReady();
 }
 
+// ===== ตีกลับคำขอเดิมมาแก้ (AREA เจ้าของทีม หรือผู้อนุมัติ) — เปิดฟอร์มเดิมพร้อมข้อมูลเดิมให้แก้ไข =====
+async function openEditRequest(id, backTarget) {
+  const data = await api('/api/requests/' + id);
+  const r = data.request;
+  showView('booker-form');
+  await resetForm(r.team_category);
+  form.editingRequestId = id;
+  form.editingBackTarget = backTarget;
+  form.scheduleEntryId = r.schedule_entry_id || null;
+  el('submitBtn').textContent = 'บันทึกการแก้ไข → ส่งกลับเข้าคิวใหม่';
+
+  if (r.mission_type) {
+    form.missionType = r.mission_type;
+    document.querySelectorAll('#missionGrid .mission-btn').forEach((b) => b.classList.toggle('on', b.textContent === r.mission_type));
+  }
+  await chooseTeam(r.team_code);
+  form.branch = r.branch;
+  el('fBranchChosen').innerHTML = `<div class="pill pill-accent" style="font-size:12.5px; padding:8px 12px;">${icon('pin', 14)} ${r.branch.name} · ${r.branch.province || ''} <span style="cursor:pointer; margin-left:6px; display:inline-flex;" onclick="clearBranch()">${icon('x', 13)}</span></div>`;
+  if (r.muster && form.musterPoints.length > 1) pickMusterPoint(r.muster.name);
+  await runMusterCheck();
+  if (el('fMusterReason') && r.muster_reason) el('fMusterReason').value = r.muster_reason;
+
+  // ที่พักที่เคยเลือกไว้ (r.hotelCandidates) เป็นสำเนาที่บันทึกไว้ตอนจอง ไม่มี distance_km ติดมาด้วย
+  // ต้องดึง /api/hotels-near มาจับคู่เอาระยะทางจริงกลับมาใส่ ไม่งั้น badge/ป้ายไกลเกินจะพังในหน้าฟอร์ม
+  const hotelData = await api(`/api/hotels-near?branch=${encodeURIComponent(r.branch.code)}&category=${r.team_category}`);
+  const allNear = [...hotelData.near, ...hotelData.far];
+  form.selectedHotels = (r.hotelCandidates || []).map((h) => allNear.find((x) => x.code === h.code) || { ...h, distance_km: haversineKm(r.branch.lat, r.branch.lng, h.lat, h.lng) });
+  await loadHotels();
+  renderHotelChips();
+  const anyFar = form.selectedHotels.some((sh) => sh.distance_km > form.hotelMaxKm);
+  el('farReasonBox').style.display = anyFar ? 'block' : 'none';
+  if (r.far_reason) el('fFarReason').value = r.far_reason;
+  if (form.selectedHotels[0]) { renderDistanceMap(); el('dateStepCard').style.display = 'flex'; }
+
+  el('fCheckin').value = r.checkin_date;
+  el('fCheckout').value = r.checkout_date;
+  checkDatesReady();
+
+  form.guests = r.guests.map((g) => ({ employee_code: g.employee_code, name: g.name, phone: g.phone, gender: g.gender, nickname: g.nickname, _uid: guestUidSeq++ }));
+  const byRoom = new Map();
+  r.guests.forEach((g, i) => {
+    if (g.room_no == null) return;
+    if (!byRoom.has(g.room_no)) byRoom.set(g.room_no, []);
+    byRoom.get(g.room_no).push(form.guests[i]._uid);
+  });
+  const maxRoom = byRoom.size ? Math.max(...byRoom.keys()) : 0;
+  form.roomCount = Math.max(maxRoom, roomsNeededFor(form.guests));
+  form.roomAssignments = [];
+  for (let i = 1; i <= form.roomCount; i++) {
+    const uids = byRoom.get(i) || [];
+    form.roomAssignments.push({ slots: [uids[0] ?? null, uids[1] ?? null] });
+  }
+  renderGuestChips();
+}
+
 // ===== ผู้อนุมัติ: แผนงานทั้งหมด (จองแล้ว/ยังไม่จอง) + เตือน Area ให้มาจอง =====
 let scheduleAllItems = [];
 async function loadScheduleAll() {
@@ -450,8 +509,8 @@ function scheduleMineItemHtml(it) {
 }
 
 // ===== booker form =====
-function resetForm() {
-  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, branch2: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [], scheduleEntryId: null, roomCount: null, roomAssignments: [] };
+async function resetForm(forcedCategory) {
+  form = { category: null, missionType: null, teamCode: null, musterPoints: [], chosenMuster: null, branch: null, branch2: null, musterCheck: null, hotelMaxKm: null, selectedHotels: [], guests: [], scheduleEntryId: null, roomCount: null, roomAssignments: [], editingRequestId: null, editingBackTarget: null };
   el('formError').innerHTML = ''; el('hotelChipRow').innerHTML = ''; el('hotelPickError').textContent = '';
   el('fBranchSearch').value = ''; el('fBranchChosen').innerHTML = '';
   el('fCheckin').value = ''; el('fCheckout').value = '';
@@ -464,9 +523,18 @@ function resetForm() {
   el('nearHotelsList').innerHTML = ''; el('farHotelsList').innerHTML = ''; el('farHotelsList').style.display = 'none';
   el('farReasonBox').style.display = 'none'; el('fFarReason').value = ''; el('distanceMapBox').innerHTML = '';
   el('newHotelName').value = ''; el('newHotelCoords').value = ''; el('newHotelPrice').value = ''; el('addHotelForm').style.display = 'none'; el('addHotelError').innerHTML = '';
+  el('submitBtn').textContent = 'ส่งขออนุมัติ →';
 
-  const bookerCats = session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category);
   const seg = el('teamCatSeg');
+  if (forcedCategory) {
+    // แก้ไขคำขอเดิม (ตีกลับมาแก้) — ล็อกตามประเภททีมของคำขอนั้นเลย ไม่ใช้สิทธิ์ผู้จองของคนกดแก้
+    // (ผู้อนุมัติแก้คำขอทีมที่ตัวเองไม่ได้มีบทบาทผู้จองอยู่ก็ต้องแก้ได้)
+    form.category = forcedCategory;
+    seg.innerHTML = `<div class="seg locked">${CATEGORY_LABEL[form.category]}</div>`;
+    await loadMissionGrid();
+    return;
+  }
+  const bookerCats = session.roleOptions.filter((r) => r.role === 'booker').map((r) => r.category);
   if (bookerCats.length <= 1) {
     // พนักงานที่จองเอง (ไม่มีบทบาทผู้จอง) ให้ยึดหมวดทีมของตัวเองแทน ไม่ใช่ default 'activity' เสมอ
     form.category = bookerCats[0] || session.employee.category || 'activity';
@@ -475,7 +543,7 @@ function resetForm() {
     seg.innerHTML = bookerCats.map((c, i) => `<div class="seg ${i === 0 ? 'on' : ''}" data-val="${c}" onclick="selectCategory('${c}')">${CATEGORY_LABEL[c]}</div>`).join('');
     form.category = bookerCats[0];
   }
-  loadMissionGrid();
+  await loadMissionGrid();
 }
 function selectCategory(cat) {
   form.category = cat;
@@ -959,14 +1027,21 @@ async function submitRequest() {
     hotel_codes: form.selectedHotels.map((h) => h.code),
     far_reason: el('fFarReason').value.trim() || null,
     created_by: session.employee.code,
+    actor: session.employee.code,
     guests: form.guests.map((g) => ({ employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender, room_no: roomNoForGuestUid(g._uid) })),
     schedule_entry_id: form.scheduleEntryId || null,
   };
   try {
     el('submitBtn').disabled = true;
-    await api('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    if (currentRole === 'employee') { showView('employee-view'); loadEmployeeView(); }
-    else { showView('booker-home'); loadBookerHome(); }
+    if (form.editingRequestId) {
+      await api('/api/requests/' + form.editingRequestId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (form.editingBackTarget === 'approver') { await loadApproverQueue(); await openApproverDetail(form.editingRequestId); }
+      else { showView('booker-home'); loadBookerHome(); }
+    } else {
+      await api('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      if (currentRole === 'employee') { showView('employee-view'); loadEmployeeView(); }
+      else { showView('booker-home'); loadBookerHome(); }
+    }
   } catch (e) {
     el('formError').innerHTML = errBox(e.message);
   } finally {
@@ -1066,7 +1141,8 @@ function detailHtml(r) {
     ${r.muster ? `<div class="note-box muted" style="margin-top:12px;"><b>ระยะทาง</b>จุดรวมพล (${r.muster.name}) → สาขา ${r.musterBranchKm ?? '-'} กม. · สาขา → ที่พัก ${r.branchHotelKm ?? '-'} กม. · รวม ${r.totalKm?.toFixed ? r.totalKm.toFixed(1) : r.totalKm} กม.</div>` : ''}
     <div class="section-title" style="margin:14px 0 10px; display:block;">ข้อมูลผู้เข้าพัก · ก็อบทีละคน</div>
     <div class="req-grid" style="grid-template-columns:1fr; gap:10px;">${personBlocks}</div>
-    <div style="margin-top:16px;">${gate}</div>`;
+    <div style="margin-top:16px;">${gate}</div>
+    ${!detailCtx.readonly && ['pending', 'booked'].includes(r.status) ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>` : ''}`;
 }
 let completeChosenHotel = null;
 let completeCandidates = [];
@@ -1304,6 +1380,10 @@ async function openApproverDetail(id) {
   const deleteBtnHtml = r.status !== 'done'
     ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger); margin-top:8px;" onclick="deleteRequestFromApprover(${r.id})">${icon('x', 14)} ลบคำขอนี้ทิ้ง</button>`
     : '';
+  // ตีกลับมาแก้ไขเอง — ทำได้เฉพาะ 'pending'/'booked' (อนุมัติไปแล้วแก้ไม่ได้ ต้องตีกลับก่อนถึงจะแก้ได้)
+  const editBtnHtml = ['pending', 'booked'].includes(r.status)
+    ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'approver')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>`
+    : '';
   const apChosen = ['booked', 'approved', 'done'].includes(r.status);
   const candidatesHtml = (!apChosen && (r.hotelCandidates || []).length > 1) ? `
     <div class="note-box muted" style="margin:10px 0;"><b>ที่พักที่เลือกไว้ (${r.hotelCandidates.length} อันดับ)</b>${r.hotelCandidates.map((h, i) => {
@@ -1324,6 +1404,7 @@ async function openApproverDetail(id) {
     <div style="margin-bottom:18px;">${guestsHtml}</div>
     ${r.far_reason ? `<div class="note-box" style="margin-bottom:18px;"><b>เหตุผลเลือกที่พักนอกรัศมี</b>${r.far_reason}</div>` : ''}
     ${actions}
+    ${editBtnHtml}
     ${deleteBtnHtml}`;
   renderApproverMap(r);
 }

@@ -435,15 +435,17 @@ function datesOverlap(aStart, aEnd, bStart, bEnd) {
 
 // คืน Map: employee_code -> รายการคำขอที่ยังเปิดอยู่ทั้งหมด (ไม่ใช่แค่รายการเดียว)
 // เพราะคนคนหนึ่งสามารถมีคำขอที่ยังไม่จบได้หลายรายการพร้อมกัน ถ้าวันที่ไม่ชนกัน
-async function getOpenBookingsMap() {
+// excludeRequestId: ตอนแก้ไขคำขอเดิม (PUT) ต้องไม่เอาคำขอที่กำลังแก้เองมานับเป็น "ชนกับตัวเอง"
+async function getOpenBookingsMap(excludeRequestId) {
   const { data, error } = await supabase
     .from('approval_request_guests')
-    .select('employee_code, approval_requests!inner(status, branch_name, checkin_date, checkout_date)')
+    .select('employee_code, request_id, approval_requests!inner(status, branch_name, checkin_date, checkout_date)')
     .in('approval_requests.status', ['pending', 'booked', 'approved']);
   if (error) throw new Error(error.message);
   const map = new Map();
   for (const row of data) {
     if (!row.employee_code) continue;
+    if (excludeRequestId != null && row.request_id === excludeRequestId) continue;
     const r = row.approval_requests;
     const arr = map.get(row.employee_code) || [];
     arr.push({ branch: r.branch_name, checkin_date: r.checkin_date, checkout_date: r.checkout_date });
@@ -533,8 +535,10 @@ async function serializeRequest(r) {
   };
 }
 
-app.post('/api/requests', async (req, res) => {
-  const b = req.body;
+// ตรวจ+ประกอบข้อมูลคำขอจองจาก body — ใช้ร่วมกันทั้งสร้างใหม่ (POST) และแก้ไขของเดิม (PUT)
+// excludeRequestId: ตอนแก้ไข ต้องไม่เอาคำขอที่กำลังแก้เองมานับเป็น "จองซ้ำกับตัวเอง"
+// ownerActorCode: คนที่จะใช้เช็คสิทธิ์เป็นเจ้าของทีม (POST ใช้ created_by, PUT ใช้ actor ที่กดแก้)
+async function validateRequestBody(b, { excludeRequestId, ownerActorCode } = {}) {
   const errors = [];
   const rule = RULES[b.team_category];
   if (!rule) errors.push('ต้องเลือกประเภททีม');
@@ -542,7 +546,6 @@ app.post('/api/requests', async (req, res) => {
   if (!b.team_code) errors.push('ต้องเลือกทีมที่เดินทาง');
   if (!b.branch_code) errors.push('ต้องเลือกสาขา');
   if (!b.checkin_date || !b.checkout_date) errors.push('ต้องระบุวันเข้าพัก-เช็คเอาท์');
-  if (!b.created_by) errors.push('ไม่พบผู้สร้างคำขอ (session หมดอายุ?)');
   if (!Array.isArray(b.guests) || b.guests.length === 0) errors.push('ต้องมีผู้เข้าพักอย่างน้อย 1 คน');
 
   const hotelCodes = Array.isArray(b.hotel_codes) ? [...new Set(b.hotel_codes.filter(Boolean))] : [];
@@ -557,9 +560,9 @@ app.post('/api/requests', async (req, res) => {
 
   // ผู้จอง (Area) จองได้เฉพาะทีมที่ตัวเองดูแล + ทีมตัวเอง — กันจองสลับทีมกันเอง
   // พนักงานทั่วไป (ไม่ใช่ผู้จอง) จองได้แค่ทีมตัวเองทีมเดียว
-  if (b.created_by && b.team_code) {
-    const creatorRow = ref.getStaff().find((s) => s.code === b.created_by && s.category === b.team_category);
-    const ownedTeams = creatorRow ? getOwnedTeams(b.created_by, b.team_category) : null;
+  if (ownerActorCode && b.team_code) {
+    const creatorRow = ref.getStaff().find((s) => s.code === ownerActorCode && s.category === b.team_category);
+    const ownedTeams = creatorRow ? getOwnedTeams(ownerActorCode, b.team_category) : null;
     if (ownedTeams) {
       if (!ownedTeams.has(b.team_code)) errors.push('คุณไม่มีสิทธิ์จองให้ทีมนี้ (ไม่ใช่ทีมที่ดูแลหรือทีมตัวเอง)');
     } else if (creatorRow) {
@@ -595,7 +598,7 @@ app.post('/api/requests', async (req, res) => {
   // (คนคนเดียวจองสองแผนต่างวันที่ไม่ชนกันได้ เช่น จัดงานคนละวันในเดือนเดียวกัน)
   if (Array.isArray(b.guests) && b.checkin_date && b.checkout_date) {
     try {
-      const openMap = await getOpenBookingsMap();
+      const openMap = await getOpenBookingsMap(excludeRequestId);
       for (const g of b.guests) {
         if (!g.employee_code) continue;
         const conflict = await getOpenBookingConflict(openMap, g.employee_code, b.checkin_date, b.checkout_date);
@@ -609,6 +612,14 @@ app.post('/api/requests', async (req, res) => {
     if (roomErr) errors.push(roomErr);
   }
 
+  return { errors, branch, hotel, hotelCandidates, muster };
+}
+
+app.post('/api/requests', async (req, res) => {
+  const b = req.body;
+  if (!b.created_by) return res.status(400).json({ error: 'ไม่พบผู้สร้างคำขอ (session หมดอายุ?)' });
+
+  const { errors, branch, hotel, hotelCandidates, muster } = await validateRequestBody(b, { ownerActorCode: b.created_by });
   if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
 
   const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link, stay_count: h.stay_count || 0 }));
@@ -642,6 +653,53 @@ app.post('/api/requests', async (req, res) => {
 
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', inserted.id).single();
   res.status(201).json({ request: await serializeRequest(full) });
+});
+
+// ตีกลับมาแก้ไขคำขอเดิม — เฉพาะ "รอ AREA จอง" หรือ "จองแล้ว รออนุมัติ" เท่านั้น (อนุมัติไปแล้วแก้ไม่ได้ ต้องตีกลับผ่าน action
+// reject ก่อน) จำกัดสิทธิ์เหมือนจุดอื่นที่แก้ไขคำขอคนอื่นได้: ผู้อนุมัติของทีมนั้น หรือ AREA ที่ดูแลทีมนั้น
+// แก้แล้วรีเซ็ตสถานะกลับ 'pending' เสมอ เพราะแก้ไขข้อมูลกระทบสิ่งที่ AREA/ผู้อนุมัติเพิ่งกดยืนยันไปแล้ว ต้องเริ่มขั้นตอนใหม่
+app.put('/api/requests/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const b = req.body;
+  const actor = String(b.actor || '').trim();
+  const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
+  if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
+  if (!['pending', 'booked'].includes(r.status)) return res.status(400).json({ error: 'แก้ไขได้เฉพาะคำขอที่ยังไม่ได้อนุมัติเท่านั้น' });
+
+  const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
+  if (!isApprover) {
+    const ownedTeams = getOwnedTeams(actor, r.team_category);
+    if (!ownedTeams || !ownedTeams.has(r.team_code)) {
+      return res.status(403).json({ error: 'แก้ไขคำขอนี้ได้เฉพาะผู้อนุมัติหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
+    }
+  }
+
+  const { errors, branch, hotel, hotelCandidates, muster } = await validateRequestBody(b, { excludeRequestId: id, ownerActorCode: isApprover ? null : actor });
+  if (errors.length) return res.status(400).json({ error: errors.join(' / ') });
+
+  const hotelCandidatesJson = hotelCandidates.map((h) => ({ code: h.code, name: h.name, lat: h.lat, lng: h.lng, price_per_night: h.price_per_night, map_link: h.map_link, stay_count: h.stay_count || 0 }));
+  const update = {
+    team_category: b.team_category, mission_type: b.mission_type, team_code: b.team_code,
+    branch_code: branch.code, branch_name: branch.name, branch_province: branch.province, branch_lat: branch.lat, branch_lng: branch.lng,
+    checkin_date: b.checkin_date, checkout_date: b.checkout_date,
+    hotel_code: hotel.code, hotel_name: hotel.name, hotel_price_per_night: hotel.price_per_night, hotel_map_link: hotel.map_link, hotel_lat: hotel.lat, hotel_lng: hotel.lng,
+    hotel_candidates: hotelCandidatesJson,
+    muster_name: muster ? muster.muster_name : null, muster_lat: muster ? muster.lat : null, muster_lng: muster ? muster.lng : null,
+    muster_reason: b.muster_reason || null,
+    far_reason: b.far_reason || null,
+    status: 'pending', booked_by: null, booked_at: null, approved_by: null, approved_at: null, reject_reason: null,
+  };
+  const { error: updErr } = await supabase.from('approval_requests').update(update).eq('id', id);
+  if (updErr) return res.status(500).json({ error: 'บันทึกคำขอไม่สำเร็จ: ' + updErr.message });
+
+  const { error: delErr } = await supabase.from('approval_request_guests').delete().eq('request_id', id);
+  if (delErr) return res.status(500).json({ error: 'ลบรายชื่อผู้เข้าพักเดิมไม่สำเร็จ: ' + delErr.message });
+  const guestRows = b.guests.map((g) => ({ request_id: id, employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null, room_no: g.room_no ?? null }));
+  const { error: guestErr } = await supabase.from('approval_request_guests').insert(guestRows);
+  if (guestErr) return res.status(500).json({ error: 'บันทึกรายชื่อผู้เข้าพักไม่สำเร็จ: ' + guestErr.message });
+
+  const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
+  res.json({ request: await serializeRequest(full) });
 });
 
 app.get('/api/requests', async (req, res) => {
