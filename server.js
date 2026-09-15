@@ -182,10 +182,14 @@ function findAreaOwnerFor(teamCode, category) {
 }
 
 // แจ้งเตือนพนักงานทุกคนในทีมนั้น (ไม่ใช่แค่ AREA คนเดียว) — เผื่อใครว่างก็กดจองเองก่อนได้เลย ไม่ต้องรอ AREA
+// เก็บเหตุผลตัวอย่างไว้ด้วยเวลาส่งไม่สำเร็จเลยสักคน (เช่น token ยังไม่ตั้ง หรือ LINE API error จริงๆ)
+// ไม่ใช่แค่เดาเหมารวมว่า "ยังไม่มีใครผูก" เพราะบางทีมีคนผูกไว้แล้วแต่ยังส่งไม่ผ่านด้วยสาเหตุอื่น
 async function notifyTeamEmployees(teamCode, category, text) {
   const members = ref.getStaff().filter((s) => s.team_code === teamCode && s.category === category);
   const results = await Promise.all(members.map((m) => notifyEmployee(m.code, text).catch((err) => ({ sent: false, reason: err.message }))));
-  return { count: members.length, anySent: results.some((r) => r.sent) };
+  const anySent = results.some((r) => r.sent);
+  const sampleReason = !anySent ? (results.find((r) => r.reason)?.reason || null) : null;
+  return { count: members.length, anySent, sampleReason };
 }
 
 app.get('/api/teams', (req, res) => {
@@ -366,9 +370,9 @@ app.post('/api/schedule-entries/:id/remind', requireApprover, async (req, res) =
   if (!entry) return res.status(404).json({ error: 'ไม่พบรายการนี้' });
   const branch = findBranch(entry.branch_code);
   const text = `🔔 เตือนจองที่พัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nใครว่างเข้าไปจองในระบบให้ทีมได้เลยนะครับ/ค่ะ`;
-  const { count, anySent } = await notifyTeamEmployees(entry.team_code, entry.team_category, text);
+  const { count, anySent, sampleReason } = await notifyTeamEmployees(entry.team_code, entry.team_category, text);
   if (!count) return res.status(400).json({ error: 'หาพนักงานในทีมนี้ไม่เจอ' });
-  res.json({ ok: true, sent: anySent, count });
+  res.json({ ok: true, sent: anySent, count, reason: sampleReason });
 });
 
 // เตือนอัตโนมัติทุกวัน: แผนงานที่ยังไม่จอง และเหลืออีก 3 วันจะถึงวันเข้าพัก

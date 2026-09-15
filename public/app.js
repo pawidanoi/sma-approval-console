@@ -479,7 +479,7 @@ async function remindScheduleEntry(id) {
   btn.disabled = true; btn.textContent = 'กำลังส่ง...';
   try {
     const data = await api(`/api/schedule-entries/${id}/remind?actor=${encodeURIComponent(session.employee.code)}`, { method: 'POST' });
-    btn.textContent = data.sent ? `✓ เตือนแล้ว (${data.count} คน)` : 'ส่งไม่สำเร็จ (ยังไม่มีใครผูก LINE ไว้)';
+    btn.textContent = data.sent ? `✓ เตือนแล้ว (${data.count} คน)` : `ส่งไม่สำเร็จ: ${data.reason || 'ไม่ทราบสาเหตุ'}`;
     if (!data.sent) btn.disabled = false;
   } catch (e) {
     btn.textContent = 'ส่งไม่สำเร็จ'; btn.disabled = false;
