@@ -12,7 +12,9 @@ const { notifyEmployee } = require('./lib/line-notify');
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 app.use(express.json());
-app.use(express.static(path.join(__dirname, 'public')));
+// no-cache (ไม่ใช่ห้าม cache แต่บังคับเช็คกับเซิร์ฟเวอร์ก่อนใช้ทุกครั้งผ่าน ETag) — กัน
+// เบราว์เซอร์เสิร์ฟ app.js/index.html เวอร์ชันเก่าค้างหลัง deploy ใหม่ จนเห็นฟีเจอร์ใหม่ช้ากว่าที่ควร
+app.use(express.static(path.join(__dirname, 'public'), { setHeaders: (res) => res.setHeader('Cache-Control', 'no-cache') }));
 
 const MISSION_TYPES = {
   activity: ['งานแฟร์', 'งานเปิดสาขาใหม่', 'ประชุม', 'สำรวจพื้นที่', 'ปิดเป้า', 'แฟร์ย้ำ1', 'แฟร์ย้ำ2', 'แฟร์200K', 'เปิดสาขาใหม่'],
