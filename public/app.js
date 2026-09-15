@@ -1196,14 +1196,23 @@ async function submitBook(id) {
 // ขั้นที่ 2: หลังเจ้าของทีมอนุมัติแล้ว AREA แค่ยืนยันที่พักที่ได้จริงอีกครั้ง (แก้ได้ถ้าเปลี่ยน) แล้วปิดงาน (approved -> done)
 let finalizeChosenHotel = null;
 let finalizeCandidates = [];
+// ผู้อนุมัติกดยืนยันที่พักปิดงานเองได้เลยจากหน้ารายละเอียดของตัวเอง ไม่ต้องรอ AREA — ใช้ฟอร์มเดียวกับ
+// ที่ AREA ใช้ (openFinalize) แค่ทำเครื่องหมายไว้ใน detailCtx ว่ากลับไปที่ไหน (แผงผู้อนุมัติ ไม่ใช่ booker-home)
+function openFinalizeFromApprover(id) {
+  detailCtx = { backTarget: 'approver', readonly: false, requestId: id };
+  return openFinalize(id);
+}
 async function openFinalize(id) {
   const data = await api('/api/requests/' + id);
   const r = data.request;
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
   finalizeCandidates = candidates;
   finalizeChosenHotel = r.hotel?.code || candidates[0]?.code || null;
+  const backBtnHtml = detailCtx.backTarget === 'approver'
+    ? `<button class="back-link" onclick="loadApproverQueue().then(() => openApproverDetail(${id}))">‹ กลับไปรายละเอียดการจอง</button>`
+    : `<button class="back-link" onclick="openDetail(${id}, '${detailCtx.backTarget}', false); showView('booking-detail');">‹ กลับไปรายละเอียดการจอง</button>`;
   el('completeRoot').innerHTML = `
-    <button class="back-link" onclick="openDetail(${id}, '${detailCtx.backTarget}', false); showView('booking-detail');">‹ กลับไปรายละเอียดการจอง</button>
+    ${backBtnHtml}
     <div class="card" style="border-color:var(--success); background:var(--success-soft); display:flex; flex-direction:column; gap:12px;">
       <div style="display:flex; flex-direction:column; align-items:center; text-align:center; gap:2px;">
         ${EMPTY_ILLUSTRATIONS.allDone}
@@ -1238,9 +1247,8 @@ async function submitFinalize(id) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor: session.employee.code, chosen_hotel_code: finalizeChosenHotel }),
     });
-    showView(detailCtx.backTarget === 'approver-queue' ? 'approver-queue' : 'booker-home');
-    if (currentRole === 'booker') loadBookerHome();
-    if (currentRole === 'approver') loadApproverQueue();
+    if (detailCtx.backTarget === 'approver') { await loadApproverQueue(); await openApproverDetail(id); }
+    else { showView('booker-home'); loadBookerHome(); }
   } catch (e) {
     el('finalizeError').innerHTML = errBox(e.message);
   }
@@ -1356,7 +1364,17 @@ async function openApproverDetail(id) {
   const guestsHtml = guestListHtml(r);
   let actions = '';
   if (r.status === 'pending') {
-    actions = `<div class="note-box muted"><b>รอ AREA จองใน Choowap ก่อน</b>จะมาให้คุณอนุมัติหลัง AREA กด "จองแล้ว"</div>`;
+    actions = `<div class="note-box muted"><b>รอ AREA จองใน Choowap ก่อน</b>จะมาให้คุณอนุมัติหลัง AREA กด "จองแล้ว" — หรือตีกลับคำขอนี้ไปหาผู้จอง/พนักงานที่สร้างเลยได้ถ้าเห็นว่าไม่ถูกต้องตั้งแต่ต้น</div>
+    <div class="sticky-foot" id="approverActionBar">
+      <button class="btn btn-danger btn-block" onclick="showRejectBox(${r.id})">${icon('undo', 16)} ตีกลับคำขอนี้</button>
+    </div>
+    <div class="sticky-foot" id="rejectBox" style="display:none; flex-direction:column; gap:8px;">
+      <textarea id="rejectReason" rows="2" placeholder="พิมพ์เหตุผล/หมายเหตุที่ส่งกลับ"></textarea>
+      <div style="display:flex; gap:8px;">
+        <button class="btn" style="flex:1;" onclick="hideRejectBox()">ยกเลิก</button>
+        <button class="btn btn-danger" style="flex:1.6;" onclick="rejectRequest(${r.id})">ยืนยันตีกลับ</button>
+      </div>
+    </div>`;
   } else if (r.status === 'booked') {
     actions = `<div class="sticky-foot" id="approverActionBar">
       <button class="btn btn-danger" style="flex:1;" onclick="showRejectBox(${r.id})">${icon('undo', 16)} ตีกลับ (ให้ลองที่พักอื่น)</button>
@@ -1370,7 +1388,8 @@ async function openApproverDetail(id) {
       </div>
     </div>`;
   } else if (r.status === 'approved') {
-    actions = `<div class="note-box success"><b>อนุมัติแล้ว</b>รอ AREA ยืนยันปิดงาน</div>`;
+    actions = `<div class="note-box success" style="margin-bottom:10px;"><b>อนุมัติแล้ว</b>รอ AREA ยืนยันปิดงาน — หรือกดยืนยันที่พักที่ได้จริงเองเลยก็ได้</div>
+    <button class="btn btn-success btn-block" onclick="openFinalizeFromApprover(${r.id})">${icon('check', 16)} ยืนยันที่พัก → ปิดงาน</button>`;
   } else if (r.status === 'done') {
     actions = `<div class="note-box success"><b>จองสำเร็จแล้ว</b>${r.confirmation_no ? `เลขยืนยัน <span class="num">${r.confirmation_no}</span>` : ''}${voucherHtml(r.voucher_url)}</div>`;
   } else if (r.status === 'rejected') {
