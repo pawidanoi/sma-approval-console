@@ -172,12 +172,20 @@ function getOwnedTeams(actorCode, category) {
 }
 
 // หาว่า "ทีมนี้" มีผู้จอง (Area) คนไหนดูแลอยู่ — อ่านจาก area_owner ที่ติดไว้กับทีมนั้น แล้วหาเจ้าของชื่อเล่นนั้น
+// (ทีม setup ไม่มี area_owner เลยเพราะ AREA ทุกคนดูแลได้ทุกทีม — ฟังก์ชันนี้คืน null ให้ ผู้เรียกต้องเช็คเอง)
 function findAreaOwnerFor(teamCode, category) {
   const staff = ref.getStaff().filter((s) => s.category === category);
   const teamRow = staff.find((s) => s.team_code === teamCode && s.area_owner);
   if (!teamRow) return null;
   const ownerNick = bareNickname(teamRow.area_owner);
   return staff.find((s) => s.role === 'ผู้จอง' && bareNickname(s.nickname) === ownerNick) || null;
+}
+
+// แจ้งเตือนพนักงานทุกคนในทีมนั้น (ไม่ใช่แค่ AREA คนเดียว) — เผื่อใครว่างก็กดจองเองก่อนได้เลย ไม่ต้องรอ AREA
+async function notifyTeamEmployees(teamCode, category, text) {
+  const members = ref.getStaff().filter((s) => s.team_code === teamCode && s.category === category);
+  const results = await Promise.all(members.map((m) => notifyEmployee(m.code, text).catch((err) => ({ sent: false, reason: err.message }))));
+  return { count: members.length, anySent: results.some((r) => r.sent) };
 }
 
 app.get('/api/teams', (req, res) => {
@@ -356,12 +364,11 @@ app.delete('/api/admin/requests-all', requireApprover, async (req, res) => {
 app.post('/api/schedule-entries/:id/remind', requireApprover, async (req, res) => {
   const { data: entry } = await supabase.from('approval_schedule_entries').select('*').eq('id', req.params.id).maybeSingle();
   if (!entry) return res.status(404).json({ error: 'ไม่พบรายการนี้' });
-  const areaOwner = findAreaOwnerFor(entry.team_code, entry.team_category);
-  if (!areaOwner) return res.status(400).json({ error: 'หาผู้รับผิดชอบทีมนี้ไม่เจอ (ยังไม่ได้ตั้ง Area ที่ดูแลทีมนี้)' });
   const branch = findBranch(entry.branch_code);
-  const text = `🔔 เตือนจองที่พัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nรบกวนเข้าไปจองในระบบด้วยนะครับ/ค่ะ`;
-  const result = await notifyEmployee(areaOwner.code, text);
-  res.json({ ok: true, sent: result.sent, reason: result.reason || null });
+  const text = `🔔 เตือนจองที่พัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nใครว่างเข้าไปจองในระบบให้ทีมได้เลยนะครับ/ค่ะ`;
+  const { count, anySent } = await notifyTeamEmployees(entry.team_code, entry.team_category, text);
+  if (!count) return res.status(400).json({ error: 'หาพนักงานในทีมนี้ไม่เจอ' });
+  res.json({ ok: true, sent: anySent, count });
 });
 
 // เตือนอัตโนมัติทุกวัน: แผนงานที่ยังไม่จอง และเหลืออีก 3 วันจะถึงวันเข้าพัก
@@ -373,12 +380,10 @@ async function checkUpcomingScheduleReminders() {
     const { data, error } = await supabase.from('approval_schedule_entries').select('*').is('matched_request_id', null).is('reminder_sent_at', null).eq('suggested_checkin', targetDate);
     if (error) throw new Error(error.message);
     for (const entry of data || []) {
-      const areaOwner = findAreaOwnerFor(entry.team_code, entry.team_category);
-      if (!areaOwner) continue;
       const branch = findBranch(entry.branch_code);
-      const text = `🔔 เตือนอัตโนมัติ: อีก 3 วันถึงวันเข้าพัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nรีบเข้าไปจองที่พักในระบบด้วยนะครับ/ค่ะ`;
-      const result = await notifyEmployee(areaOwner.code, text);
-      if (result.sent) await supabase.from('approval_schedule_entries').update({ reminder_sent_at: new Date().toISOString() }).eq('id', entry.id);
+      const text = `🔔 เตือนอัตโนมัติ: อีก 3 วันถึงวันเข้าพัก\nทีม ${entry.team_code} · ${branch?.name || '-'}\nเข้าพัก ${entry.suggested_checkin} – ${entry.suggested_checkout}\nใครว่างรีบเข้าไปจองที่พักในระบบให้ทีมด้วยนะครับ/ค่ะ`;
+      const { anySent } = await notifyTeamEmployees(entry.team_code, entry.team_category, text);
+      if (anySent) await supabase.from('approval_schedule_entries').update({ reminder_sent_at: new Date().toISOString() }).eq('id', entry.id);
     }
   } catch (err) { console.error('[schedule-reminder] เช็คแจ้งเตือน 3 วันก่อนเข้าพักล้มเหลว:', err.message); }
 }
@@ -648,6 +653,11 @@ app.post('/api/requests', async (req, res) => {
   if (approverRow) {
     notifyEmployee(approverRow.code, `📋 มีคำขอจองใหม่รออนุมัติ\nทีม ${b.team_code} · ${branch.name}\n${b.checkin_date} – ${b.checkout_date}`).catch((err) => console.error('[line-notify] แจ้งผู้อนุมัติไม่สำเร็จ:', err.message));
   }
+  // แจ้ง AREA ที่ดูแลทีมนี้ด้วยว่ามีแผนจองเข้ามาแล้ว ให้รีบเข้าไปจองที่พักใน Choowap ต่อ
+  const areaOwner = findAreaOwnerFor(b.team_code, b.team_category);
+  if (areaOwner) {
+    notifyEmployee(areaOwner.code, `📥 มีแผนจองเข้ามาใหม่ รอ AREA จองที่พัก\nทีม ${b.team_code} · ${branch.name}\n${b.checkin_date} – ${b.checkout_date}`).catch((err) => console.error('[line-notify] แจ้ง AREA ไม่สำเร็จ:', err.message));
+  }
 
   const guestRows = b.guests.map((g) => ({ request_id: inserted.id, employee_code: g.employee_code || null, name: g.name, phone: g.phone || null, gender: g.gender || null, room_no: g.room_no ?? null }));
   const { error: guestErr } = await supabase.from('approval_request_guests').insert(guestRows);
@@ -785,6 +795,15 @@ app.patch('/api/requests/:id', async (req, res) => {
 
   const { error: updErr } = await supabase.from('approval_requests').update(update).eq('id', id);
   if (updErr) return res.status(500).json({ error: updErr.message });
+
+  // AREA เพิ่งจองเสร็จ — ตอนนี้แหละที่พร้อมให้ผู้อนุมัติกดอนุมัติจริงๆ แจ้งเตือนตรงจุดนี้
+  if (action === 'book') {
+    const approverRow = ref.getStaff().find((s) => s.category === r.team_category && s.role === 'ผู้อนุมัติ');
+    if (approverRow) {
+      notifyEmployee(approverRow.code, `📋 AREA จองที่พักแล้ว รออนุมัติ\nทีม ${r.team_code} · ${r.branch_name}\n${r.checkin_date} – ${r.checkout_date}\nที่พัก: ${update.hotel_name}`).catch((err) => console.error('[line-notify] แจ้งผู้อนุมัติไม่สำเร็จ:', err.message));
+    }
+  }
+
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();
   res.json({ request: await serializeRequest(full) });
 });

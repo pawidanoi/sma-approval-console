@@ -460,7 +460,7 @@ function scheduleAllItemHtml(it) {
     <div class="trav-top">${avatarHtml(it.team_code, 36)}<div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.team_code} · ${it.mission_type || '-'}${it.area_owner ? ' · ผู้จอง: ' + (it.area_owner.nickname || it.area_owner.code) : ' · ยังไม่ได้ตั้ง Area ดูแล'}</div></div>${statusPill}</div>
     <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span>${it.matched?.hotel_name ? `<span class="dot"></span><span>${icon('hotel', 14)} ${it.matched.hotel_name}</span>` : ''}</div>
     <div style="display:flex; gap:8px; margin-top:10px;">
-      ${!it.matched ? `<button class="btn btn-primary btn-sm" id="remind-${it.id}" onclick="remindScheduleEntry(${it.id})">${icon('alert', 14)} เตือน Area ให้มาจอง</button>` : ''}
+      ${!it.matched ? `<button class="btn btn-primary btn-sm" id="remind-${it.id}" onclick="remindScheduleEntry(${it.id})">${icon('alert', 14)} เตือนพนักงานในทีมให้มาจอง</button>` : ''}
       <button class="btn btn-ghost btn-sm" style="color:var(--danger);" onclick="deleteScheduleEntry(${it.id})">${icon('undo', 14)} ลบรายการนี้</button>
     </div>
   </div>`;
@@ -479,7 +479,7 @@ async function remindScheduleEntry(id) {
   btn.disabled = true; btn.textContent = 'กำลังส่ง...';
   try {
     const data = await api(`/api/schedule-entries/${id}/remind?actor=${encodeURIComponent(session.employee.code)}`, { method: 'POST' });
-    btn.textContent = data.sent ? '✓ เตือนแล้ว' : 'ส่งไม่สำเร็จ: ' + (data.reason || '');
+    btn.textContent = data.sent ? `✓ เตือนแล้ว (${data.count} คน)` : 'ส่งไม่สำเร็จ (ยังไม่มีใครผูก LINE ไว้)';
     if (!data.sent) btn.disabled = false;
   } catch (e) {
     btn.textContent = 'ส่งไม่สำเร็จ'; btn.disabled = false;
