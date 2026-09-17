@@ -171,6 +171,12 @@ function getOwnedTeams(actorCode, category) {
   return ownedTeams;
 }
 
+// team_code นี้เป็น "ทีมสมมติ" ที่ผู้จอง/ผู้อนุมัติใช้ร่วมกัน (เช่น 'Area'/'AREA'/'HQ') ไม่ใช่ทีมสนามจริง —
+// เช็คจากว่ามีใครในทีมนี้ถือ role ผู้จอง/ผู้อนุมัติอยู่ไหม (ทีมสนามจริงจะไม่มีคนถือ role พวกนี้)
+function isPseudoTeam(teamCode, category) {
+  return ref.getStaff().some((s) => s.category === category && s.team_code === teamCode && (s.role === 'ผู้จอง' || s.role === 'ผู้อนุมัติ'));
+}
+
 // หาว่า "ทีมนี้" มีผู้จอง (Area) คนไหนดูแลอยู่ — อ่านจาก area_owner ที่ติดไว้กับทีมนั้น แล้วหาเจ้าของชื่อเล่นนั้น
 // (ทีม setup ไม่มี area_owner เลยเพราะ AREA ทุกคนดูแลได้ทุกทีม — ฟังก์ชันนี้คืน null ให้ ผู้เรียกต้องเช็คเอง)
 function findAreaOwnerFor(teamCode, category) {
@@ -762,14 +768,23 @@ app.get('/api/employee-lookup', async (req, res) => {
   const code = String(req.query.code || '').trim();
   const rows = staffRowsFor(code);
   if (!rows.length) return res.status(404).json({ error: 'ไม่พบรหัสพนักงานนี้' });
-  const [{ data: guestRows, error: guestErr }, { data: ownRequests, error: ownErr }] = await Promise.all([
+  const viewer = rows[0];
+  // ทีมสนามจริง: เห็นคำขอทั้งทีมเลย ไม่ว่าใครสร้าง/ใครเป็นผู้เข้าพัก (โปร่งใสในทีม)
+  // ทีมสมมติของผู้จอง/ผู้อนุมัติ (Area/HQ ฯลฯ): เห็นเฉพาะคำขอของตัวเอง เหมือนเดิม — ไม่งั้น AREA/ผู้อนุมัติ
+  // ทุกคนจะเห็นคำขอกันและกันหมดเพราะ team_code เดียวกัน (บั๊กเดียวกับที่เพิ่งแก้ในหน้า AREA)
+  const teamWide = !isPseudoTeam(viewer.team_code, viewer.category);
+  const queries = [
     supabase.from('approval_request_guests').select('request_id, approval_requests(*, approval_request_guests(*))').eq('employee_code', code),
     // คำขอที่ตัวเองเป็นคนสร้าง (จองเพิ่มนอกแผนงาน) ต้องเห็นด้วยแม้ไม่ได้เป็นผู้เข้าพักเอง — ไม่งั้นถ้าโดน
     // ตีกลับให้มาแก้ แต่ตัวเองไม่ได้อยู่ในรายชื่อผู้เข้าพัก จะหาคำขอตัวเองไม่เจอเลย ไปกดปุ่มแก้ไม่ได้
     supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('created_by', code),
-  ]);
-  if (guestErr) return res.status(500).json({ error: guestErr.message });
-  if (ownErr) return res.status(500).json({ error: ownErr.message });
+  ];
+  if (teamWide && viewer.team_code) {
+    queries.push(supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('team_code', viewer.team_code).eq('team_category', viewer.category));
+  }
+  const results = await Promise.all(queries);
+  for (const { error } of results) { if (error) return res.status(500).json({ error: error.message }); }
+  const [{ data: guestRows }, { data: ownRequests }, teamResult] = results;
   const seen = new Set();
   const requests = [];
   for (const row of guestRows || []) {
@@ -778,13 +793,13 @@ app.get('/api/employee-lookup', async (req, res) => {
     seen.add(r.id);
     requests.push(r);
   }
-  for (const r of ownRequests || []) {
+  for (const r of [...(ownRequests || []), ...((teamResult && teamResult.data) || [])]) {
     if (seen.has(r.id)) continue;
     seen.add(r.id);
     requests.push(r);
   }
   requests.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-  res.json({ employee: rows[0], requests: await Promise.all(requests.map(serializeRequest)) });
+  res.json({ employee: viewer, requests: await Promise.all(requests.map(serializeRequest)) });
 });
 
 app.patch('/api/requests/:id', async (req, res) => {
