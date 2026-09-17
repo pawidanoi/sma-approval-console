@@ -346,6 +346,7 @@ app.get('/api/schedule-mine', async (req, res) => {
       paired_branch: pairedRow ? findBranch(pairedRow.branch_code) || null : null,
       suggested_checkin: r.suggested_checkin, suggested_checkout: r.suggested_checkout,
       matched: matched ? { status: matched.status, hotel_name: matched.hotel_name, confirmation_no: matched.confirmation_no } : null,
+      matchedRequestId: r.matched_request_id || null,
     };
   });
   res.json({ items });

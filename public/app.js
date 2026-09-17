@@ -519,10 +519,12 @@ function scheduleMineItemHtml(it) {
   const statusPill = it.matched
     ? `<span class="pill ${STATUS_LABEL[it.matched.status][1]}">${STATUS_LABEL[it.matched.status][0]}</span>`
     : `<span class="pill pill-danger">ยังไม่จอง</span>`;
-  return `<div class="trav-card" style="cursor:default;">
+  // จองแล้ว (มี matchedRequestId) กดดูรายละเอียดเต็มได้เลย — ยังไม่จองไม่มีอะไรให้ดู กดจองเลยอย่างเดียว
+  const clickable = it.matched && it.matchedRequestId;
+  return `<div class="trav-card" ${clickable ? `onclick="openDetail(${it.matchedRequestId}, 'employee-view', true)"` : 'style="cursor:default;"'}>
     <div class="trav-top"><div class="info"><h3>${it.branch?.name || '-'}${it.paired_branch ? ' + ' + it.paired_branch.name : ''}</h3><div class="sub">${it.mission_type || '-'}</div></div>${statusPill}</div>
     <div class="trav-meta"><span>${icon('calendar', 14)} <b>${it.suggested_checkin} – ${it.suggested_checkout}</b></span>${it.matched?.hotel_name ? `<span class="dot"></span><span>${icon('hotel', 14)} ${it.matched.hotel_name}</span>` : ''}</div>
-    ${!it.matched ? `<button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='bookFromSchedule(${JSON.stringify(it)})'>${icon('check', 14)} จองเลย</button>` : ''}
+    ${!it.matched ? `<button class="btn btn-primary btn-sm" style="margin-top:10px;" onclick='event.stopPropagation(); bookFromSchedule(${JSON.stringify(it)})'>${icon('check', 14)} จองเลย</button>` : ''}
   </div>`;
 }
 
