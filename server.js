@@ -762,16 +762,24 @@ app.get('/api/employee-lookup', async (req, res) => {
   const code = String(req.query.code || '').trim();
   const rows = staffRowsFor(code);
   if (!rows.length) return res.status(404).json({ error: 'ไม่พบรหัสพนักงานนี้' });
-  const { data: guestRows, error } = await supabase
-    .from('approval_request_guests')
-    .select('request_id, approval_requests(*, approval_request_guests(*))')
-    .eq('employee_code', code);
-  if (error) return res.status(500).json({ error: error.message });
+  const [{ data: guestRows, error: guestErr }, { data: ownRequests, error: ownErr }] = await Promise.all([
+    supabase.from('approval_request_guests').select('request_id, approval_requests(*, approval_request_guests(*))').eq('employee_code', code),
+    // คำขอที่ตัวเองเป็นคนสร้าง (จองเพิ่มนอกแผนงาน) ต้องเห็นด้วยแม้ไม่ได้เป็นผู้เข้าพักเอง — ไม่งั้นถ้าโดน
+    // ตีกลับให้มาแก้ แต่ตัวเองไม่ได้อยู่ในรายชื่อผู้เข้าพัก จะหาคำขอตัวเองไม่เจอเลย ไปกดปุ่มแก้ไม่ได้
+    supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('created_by', code),
+  ]);
+  if (guestErr) return res.status(500).json({ error: guestErr.message });
+  if (ownErr) return res.status(500).json({ error: ownErr.message });
   const seen = new Set();
   const requests = [];
   for (const row of guestRows || []) {
     const r = row.approval_requests;
     if (!r || seen.has(r.id)) continue;
+    seen.add(r.id);
+    requests.push(r);
+  }
+  for (const r of ownRequests || []) {
+    if (seen.has(r.id)) continue;
     seen.add(r.id);
     requests.push(r);
   }
