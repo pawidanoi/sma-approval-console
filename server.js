@@ -487,8 +487,10 @@ app.get('/api/staff', async (req, res) => {
     rows = rows.filter((s) => s.name.toLowerCase().includes(query) || (s.nickname || '').toLowerCase().includes(query) || (s.team_code || '').toLowerCase().includes(query));
   }
   try {
+    // เดิมตัดโชว์แค่ 40 คนแรก — ทั้งสายมี 100+ คน ทำให้ "ค้นหาชื่อ/ทีมอื่น" หาคนท้ายๆ ลิสต์ไม่เจอ
+    // เอาออกเลย ให้เห็นครบทุกคนในระบบ ส่วนคนที่มีแผนวันเดียวกันแล้วยังบล็อกเลือกไม่ได้เหมือนเดิม (openBooking)
     const openMap = await getOpenBookingsMap();
-    const staff = await Promise.all(rows.slice(0, 40).map(async (s) => ({ ...s, openBooking: await getOpenBookingConflict(openMap, s.code, checkin, checkout) })));
+    const staff = await Promise.all(rows.map(async (s) => ({ ...s, openBooking: await getOpenBookingConflict(openMap, s.code, checkin, checkout) })));
     res.json({ staff });
   } catch (err) {
     res.status(500).json({ error: err.message });
