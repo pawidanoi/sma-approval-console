@@ -528,9 +528,13 @@ async function serializeRequest(r) {
   const nights = Math.round((new Date(r.checkout_date) - new Date(r.checkin_date)) / 86400000);
   const dupWarnings = await computeDupWarnings(r.id, guests, r.checkin_date, r.checkout_date);
   const creator = ref.getStaff().find((s) => s.code === r.created_by);
+  // จองเองโดยพนักงานทั่วไป (ไม่ใช่ AREA/ผู้อนุมัติที่จองจากแผนงาน) — ใช้ตัดสินใจว่าปุ่ม "ตีกลับ" ควร
+  // ส่งกลับไปให้เจ้าตัวแก้เอง หรือให้ AREA/ผู้อนุมัติแก้ให้เลย (ดู PUT /api/requests/:id ด้วย)
+  const createdByIsEmployee = !creator || !['ผู้จอง', 'ผู้อนุมัติ'].includes(creator.role);
   return {
     ...r,
     createdByName: creator ? (creator.nickname || creator.name) : r.created_by,
+    createdByIsEmployee,
     branch: { code: r.branch_code, name: r.branch_name, province: r.branch_province, lat: r.branch_lat, lng: r.branch_lng },
     hotel: r.hotel_code ? { code: r.hotel_code, name: r.hotel_name, price_per_night: r.hotel_price_per_night, map_link: r.hotel_map_link, lat: r.hotel_lat, lng: r.hotel_lng } : null,
     hotelCandidates: r.hotel_candidates || [],
@@ -682,10 +686,13 @@ app.put('/api/requests/:id', async (req, res) => {
   const actor = String(b.actor || '').trim();
   const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
-  if (!['pending', 'booked'].includes(r.status)) return res.status(400).json({ error: 'แก้ไขได้เฉพาะคำขอที่ยังไม่ได้อนุมัติเท่านั้น' });
+  // 'rejected' แก้ได้ด้วย เฉพาะกรณีเจ้าของคำขอ (พนักงานที่จองเอง) มาแก้เองหลังโดนตีกลับ — ดูเงื่อนไขสิทธิ์ด้านล่าง
+  if (!['pending', 'booked', 'rejected'].includes(r.status)) return res.status(400).json({ error: 'แก้ไขได้เฉพาะคำขอที่ยังไม่ได้อนุมัติเท่านั้น' });
 
   const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
-  if (!isApprover) {
+  const isCreatorRevivingRejected = r.status === 'rejected' && actor === r.created_by;
+  if (!isApprover && !isCreatorRevivingRejected) {
+    if (r.status === 'rejected') return res.status(403).json({ error: 'คำขอที่ถูกตีกลับ แก้ไขได้เฉพาะเจ้าของคำขอเองเท่านั้น' });
     const ownedTeams = getOwnedTeams(actor, r.team_category);
     if (!ownedTeams || !ownedTeams.has(r.team_code)) {
       return res.status(403).json({ error: 'แก้ไขคำขอนี้ได้เฉพาะผู้อนุมัติหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
@@ -723,9 +730,11 @@ app.put('/api/requests/:id', async (req, res) => {
 app.get('/api/requests', async (req, res) => {
   const { actor, role, category, status } = req.query;
   let query = supabase.from('approval_requests').select('*, approval_request_guests(*)');
+  let actorRow = null;
   if (role === 'approver' && category) query = query.eq('team_category', category).order('created_at', { ascending: true });
   else if (actor && role === 'booker') {
     // AREA ต้องเห็นคำขอทุกอันของทีมที่ตัวเองดูแล ไม่ใช่แค่อันที่ตัวเองเป็นคนสร้าง — เพราะตอนนี้พนักงานเองก็สร้างคำขอได้แล้ว
+    actorRow = ref.getStaff().find((s) => s.code === actor && s.category === (category || 'activity'));
     const ownedTeams = getOwnedTeams(actor, category || 'activity');
     query = ownedTeams
       ? query.in('team_code', [...ownedTeams]).order('created_at', { ascending: false })
@@ -735,7 +744,11 @@ app.get('/api/requests', async (req, res) => {
   if (status) query = query.eq('status', status);
   const { data, error } = await query;
   if (error) return res.status(500).json({ error: error.message });
-  res.json({ requests: await Promise.all(data.map(serializeRequest)) });
+  // team_code ของผู้จองเอง (เช่น 'Area'/'AREA') เป็นรหัสที่ผู้จองทุกคนใช้ร่วมกัน ไม่ใช่ทีมสนามจริง — ถ้า AREA
+  // คนหนึ่งจองแผนเพิ่มเองภายใต้ team_code นี้ (ไม่ผูกกับทีมสนามจริง) ต้องเห็นแค่ของตัวเองเท่านั้น ไม่งั้นจะไป
+  // โผล่ในคิวของ AREA คนอื่นที่บังเอิญมี team_code เดียวกันไปด้วย (ทีมสนามจริงที่ area_owner ผูกไว้ไม่กระทบ)
+  const rows = actorRow ? data.filter((r) => r.team_code !== actorRow.team_code || r.created_by === actor) : data;
+  res.json({ requests: await Promise.all(rows.map(serializeRequest)) });
 });
 
 app.get('/api/requests/:id', async (req, res) => {
@@ -808,6 +821,10 @@ app.patch('/api/requests/:id', async (req, res) => {
     if (approverRow) {
       notifyEmployee(approverRow.code, `📋 AREA จองที่พักแล้ว รออนุมัติ\nทีม ${r.team_code} · ${r.branch_name}\n${r.checkin_date} – ${r.checkout_date}\nที่พัก: ${update.hotel_name}`).catch((err) => console.error('[line-notify] แจ้งผู้อนุมัติไม่สำเร็จ:', err.message));
     }
+  }
+  // ตีกลับจนจบที่ rejected (ไม่ใช่แค่ถอยไป pending) — แจ้งเจ้าของคำขอให้รู้ว่าโดนตีกลับ พร้อมเหตุผล
+  if (action === 'reject' && update.status === 'rejected' && r.created_by) {
+    notifyEmployee(r.created_by, `↩️ คำขอถูกตีกลับ\nทีม ${r.team_code} · ${r.branch_name}\n${r.checkin_date} – ${r.checkout_date}\nเหตุผล: ${reason}\nแก้ไขแล้วส่งใหม่ได้ในระบบเลยนะครับ/ค่ะ`).catch((err) => console.error('[line-notify] แจ้งเจ้าของคำขอไม่สำเร็จ:', err.message));
   }
 
   const { data: full } = await supabase.from('approval_requests').select('*, approval_request_guests(*)').eq('id', id).single();

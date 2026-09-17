@@ -46,6 +46,24 @@ function alertDialog(msg) {
     okBtn.onclick = () => { el('alertModal').style.display = 'none'; okBtn.onclick = null; resolve(); };
   });
 }
+// คืนข้อความที่พิมพ์ (ต้องไม่ว่าง) หรือ null ถ้ากดยกเลิก — ใช้แทน prompt() ของเบราว์เซอร์
+function promptDialog(msg, placeholder) {
+  return new Promise((resolve) => {
+    el('promptModalMsg').textContent = msg;
+    el('promptModalInput').value = ''; el('promptModalInput').placeholder = placeholder || '';
+    el('promptModalError').innerHTML = '';
+    el('promptModal').style.display = 'flex';
+    el('promptModalInput').focus();
+    const cleanup = (result) => { el('promptModal').style.display = 'none'; okBtn.onclick = null; cancelBtn.onclick = null; resolve(result); };
+    const okBtn = el('promptModalOk'), cancelBtn = el('promptModalCancel');
+    okBtn.onclick = () => {
+      const text = el('promptModalInput').value.trim();
+      if (!text) { el('promptModalError').innerHTML = errBox('ต้องพิมพ์เหตุผลก่อน'); return; }
+      cleanup(text);
+    };
+    cancelBtn.onclick = () => cleanup(null);
+  });
+}
 function copyText(text, btn) {
   navigator.clipboard.writeText(text).then(() => flashCopied(btn)).catch(() => {
     const ta = document.createElement('textarea');
@@ -1036,6 +1054,7 @@ async function submitRequest() {
     if (form.editingRequestId) {
       await api('/api/requests/' + form.editingRequestId, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
       if (form.editingBackTarget === 'approver') { await loadApproverQueue(); await openApproverDetail(form.editingRequestId); }
+      else if (form.editingBackTarget === 'employee-view') { showView('employee-view'); loadEmployeeView(); }
       else { showView('booker-home'); loadBookerHome(); }
     } else {
       await api('/api/requests', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -1142,7 +1161,10 @@ function detailHtml(r) {
     <div class="section-title" style="margin:14px 0 10px; display:block;">ข้อมูลผู้เข้าพัก · ก็อบทีละคน</div>
     <div class="req-grid" style="grid-template-columns:1fr; gap:10px;">${personBlocks}</div>
     <div style="margin-top:16px;">${gate}</div>
-    ${!detailCtx.readonly && ['pending', 'booked'].includes(r.status) ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>` : ''}`;
+    ${!detailCtx.readonly && ['pending', 'booked'].includes(r.status) ? (r.createdByIsEmployee
+      ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="sendBackToEmployee(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับให้พนักงานแก้ไข</button>`
+      : `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>`) : ''}
+    ${detailCtx.readonly && r.status === 'rejected' && r.created_by === session.employee.code ? `<button class="btn btn-success btn-block" style="margin-top:12px;" onclick="openEditRequest(${r.id}, 'employee-view')">${icon('check', 16)} แก้ไขคำขอนี้ใหม่ → ส่งอีกครั้ง</button>` : ''}`;
 }
 let completeChosenHotel = null;
 let completeCandidates = [];
@@ -1399,9 +1421,13 @@ async function openApproverDetail(id) {
   const deleteBtnHtml = r.status !== 'done'
     ? `<button class="btn btn-ghost btn-sm" style="color:var(--danger); margin-top:8px;" onclick="deleteRequestFromApprover(${r.id})">${icon('x', 14)} ลบคำขอนี้ทิ้ง</button>`
     : '';
-  // ตีกลับมาแก้ไขเอง — ทำได้เฉพาะ 'pending'/'booked' (อนุมัติไปแล้วแก้ไม่ได้ ต้องตีกลับก่อนถึงจะแก้ได้)
+  // ตีกลับ — ทำได้เฉพาะ 'pending'/'booked' (อนุมัติไปแล้วแก้ไม่ได้ ต้องตีกลับก่อนถึงจะแก้ได้)
+  // คำขอที่พนักงานจองเอง: ส่งกลับให้เจ้าตัวไปแก้เอง (ตีกลับจริง ๆ เป็น rejected)
+  // คำขอที่ AREA จองจากแผนงาน: ไม่มีพนักงานเจ้าของให้ส่งกลับ เลยดึงมาแก้เองแทนเหมือนเดิม
   const editBtnHtml = ['pending', 'booked'].includes(r.status)
-    ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'approver')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>`
+    ? (r.createdByIsEmployee
+        ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="sendBackToEmployee(${r.id}, 'approver')">${icon('undo', 14)} ตีกลับให้พนักงานแก้ไข</button>`
+        : `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'approver')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>`)
     : '';
   const apChosen = ['booked', 'approved', 'done'].includes(r.status);
   const candidatesHtml = (!apChosen && (r.hotelCandidates || []).length > 1) ? `
@@ -1504,6 +1530,17 @@ async function rejectRequest(id) {
   if (!reason) { el('rejectReason').style.borderColor = 'var(--danger)'; el('rejectReason').placeholder = 'ต้องพิมพ์เหตุผลก่อนถึงจะตีกลับได้'; return; }
   await api('/api/requests/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reject', actor: session.employee.code, reason }) });
   await loadApproverQueue(); await openApproverDetail(id);
+}
+// ตีกลับคำขอที่พนักงานจองเองกลับไปให้เจ้าตัวแก้ไข (ไม่ใช่ AREA/ผู้อนุมัติแก้ให้) — เข้า action reject
+// เดิม (สถานะ 'rejected') แต่พนักงานเจ้าของคำขอมีปุ่ม "แก้ไขคำขอนี้ใหม่" รอเปิดฟอร์มเดิมให้แก้เองต่อ
+async function sendBackToEmployee(id, backTarget) {
+  const reason = await promptDialog('พิมพ์เหตุผลที่ตีกลับให้พนักงานแก้ไข', 'เช่น จำนวนคนไม่ตรง, เลือกวันที่ผิด ฯลฯ');
+  if (!reason) return;
+  try {
+    await api('/api/requests/' + id, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'reject', actor: session.employee.code, reason }) });
+  } catch (e) { await alertDialog(e.message); return; }
+  if (backTarget === 'approver') { await loadApproverQueue(); await openApproverDetail(id); }
+  else { showView('booker-home'); loadBookerHome(); }
 }
 async function deleteRequestFromApprover(id) {
   const ok = await confirmDialog('ลบคำขอนี้ทิ้งถาวร ข้อมูลผู้เข้าพักและการจองทั้งหมดในคำขอนี้จะหายไป ยืนยันลบ?');

@@ -436,6 +436,17 @@
       <button class="btn btn-primary btn-block" id="alertModalOk">ตกลง</button>
     </div>
   </div>
+  <div id="promptModal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; align-items:center; justify-content:center; padding:20px;">
+    <div class="card" style="max-width:360px; width:100%;">
+      <p id="promptModalMsg" style="margin:0 0 10px; font-weight:600;"></p>
+      <textarea id="promptModalInput" rows="3" style="width:100%; box-sizing:border-box; margin-bottom:8px;"></textarea>
+      <div id="promptModalError"></div>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <button class="btn" style="flex:1;" id="promptModalCancel">ยกเลิก</button>
+        <button class="btn btn-danger" style="flex:1;" id="promptModalOk">ยืนยัน</button>
+      </div>
+    </div>
+  </div>
 </div>
 <script src="/app.js"></script>
 </body>
