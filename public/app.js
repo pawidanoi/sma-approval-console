@@ -1232,8 +1232,11 @@ async function openFinalize(id) {
   const candidates = r.hotelCandidates && r.hotelCandidates.length ? r.hotelCandidates : (r.hotel ? [r.hotel] : []);
   finalizeCandidates = candidates;
   finalizeChosenHotel = r.hotel?.code || candidates[0]?.code || null;
+  // showView('approver-queue') ต้องมาก่อนเสมอ — loadApproverQueue()/openApproverDetail() แค่สลับ
+  // sub-view ภายในแผงผู้อนุมัติเอง (classList) ไม่ได้เปลี่ยน view หลักให้ ไม่งั้นจะค้างอยู่หน้านี้ต่อ
+  // ทั้งที่ข้อมูลข้างในเปลี่ยนไปแล้ว (ต้นเหตุปุ่ม "ยืนยันที่พัก → ปิดงาน" เหมือนกดค้างไม่ตอบสนอง)
   const backBtnHtml = detailCtx.backTarget === 'approver'
-    ? `<button class="back-link" onclick="loadApproverQueue().then(() => openApproverDetail(${id}))">‹ กลับไปรายละเอียดการจอง</button>`
+    ? `<button class="back-link" onclick="showView('approver-queue'); loadApproverQueue().then(() => openApproverDetail(${id}))">‹ กลับไปรายละเอียดการจอง</button>`
     : `<button class="back-link" onclick="openDetail(${id}, '${detailCtx.backTarget}', false); showView('booking-detail');">‹ กลับไปรายละเอียดการจอง</button>`;
   el('completeRoot').innerHTML = `
     ${backBtnHtml}
@@ -1274,7 +1277,7 @@ async function submitFinalize(id) {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ actor: session.employee.code, chosen_hotel_code: finalizeChosenHotel }),
     });
-    if (detailCtx.backTarget === 'approver') { await loadApproverQueue(); await openApproverDetail(id); }
+    if (detailCtx.backTarget === 'approver') { showView('approver-queue'); await loadApproverQueue(); await openApproverDetail(id); }
     else { showView('booker-home'); loadBookerHome(); }
   } catch (e) {
     el('finalizeError').innerHTML = errBox(e.message);
