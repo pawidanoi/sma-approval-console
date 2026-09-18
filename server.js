@@ -886,6 +886,7 @@ app.post('/api/requests/:id/finalize', async (req, res) => {
   const { actor, chosen_hotel_code } = req.body;
   const { data: r } = await supabase.from('approval_requests').select('*').eq('id', id).maybeSingle();
   if (!r) return res.status(404).json({ error: 'ไม่พบคำขอนี้' });
+  if (r.status === 'done') return res.status(400).json({ error: 'คำขอนี้ปิดงานไปแล้ว (อาจกดซ้ำหลังหน้าเว็บบันทึกสำเร็จไปแล้วรอบแรก)' });
   if (r.status !== 'approved') return res.status(400).json({ error: 'ต้องรอเจ้าของทีมอนุมัติการจองก่อนถึงจะยืนยันปิดงานได้' });
 
   const candidates = r.hotel_candidates || [];

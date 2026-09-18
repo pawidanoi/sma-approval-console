@@ -1248,7 +1248,7 @@ async function openFinalize(id) {
         <div id="finalizeHotelList">${candidates.map((h, i) => finalizeHotelRowHtml(h, i)).join('')}</div>
       </div>
       <div id="finalizeError"></div>
-      <button class="btn btn-success btn-block" onclick="submitFinalize(${id})">ยืนยันที่พัก → ปิดงาน</button>
+      <button class="btn btn-success btn-block" id="finalizeSubmitBtn" onclick="submitFinalize(${id})">ยืนยันที่พัก → ปิดงาน</button>
     </div>`;
   showView('booking-complete');
 }
@@ -1266,6 +1266,9 @@ function chooseFinalizeHotel(code) {
 }
 async function submitFinalize(id) {
   if (!finalizeChosenHotel) { el('finalizeError').innerHTML = errBox('ต้องเลือกว่าได้ที่พักอันไหนจริง'); return; }
+  const btn = el('finalizeSubmitBtn');
+  if (btn.disabled) return; // กันดับเบิลคลิก/กดซ้ำระหว่างรอผลครั้งแรก ไม่งั้นครั้งที่ 2 จะไปเจอสถานะ 'done' แล้วเด้ง error หลอกๆ
+  btn.disabled = true;
   try {
     await api('/api/requests/' + id + '/finalize', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -1275,6 +1278,7 @@ async function submitFinalize(id) {
     else { showView('booker-home'); loadBookerHome(); }
   } catch (e) {
     el('finalizeError').innerHTML = errBox(e.message);
+    btn.disabled = false;
   }
 }
 
