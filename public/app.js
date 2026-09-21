@@ -1166,7 +1166,7 @@ function detailHtml(r) {
     ${!detailCtx.readonly && ['pending', 'booked'].includes(r.status) ? (r.createdByIsEmployee
       ? `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="sendBackToEmployee(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับให้พนักงานแก้ไข</button>`
       : `<button class="btn btn-ghost btn-sm" style="margin-top:8px;" onclick="openEditRequest(${r.id}, 'booker')">${icon('undo', 14)} ตีกลับมาแก้ไขคำขอ</button>`) : ''}
-    ${detailCtx.readonly && r.status === 'rejected' && r.created_by === session.employee.code ? `<button class="btn btn-success btn-block" style="margin-top:12px;" onclick="openEditRequest(${r.id}, 'employee-view')">${icon('check', 16)} แก้ไขคำขอนี้ใหม่ → ส่งอีกครั้ง</button>` : ''}`;
+    ${detailCtx.readonly && r.status === 'rejected' && r.createdByIsEmployee && r.team_code === session.employee.team_code && r.team_category === session.employee.category ? `<button class="btn btn-success btn-block" style="margin-top:12px;" onclick="openEditRequest(${r.id}, 'employee-view')">${icon('check', 16)} แก้ไขคำขอนี้ใหม่ → ส่งอีกครั้ง</button>` : ''}`;
 }
 let completeChosenHotel = null;
 let completeCandidates = [];

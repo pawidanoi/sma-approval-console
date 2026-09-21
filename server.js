@@ -697,9 +697,13 @@ app.put('/api/requests/:id', async (req, res) => {
   if (!['pending', 'booked', 'rejected'].includes(r.status)) return res.status(400).json({ error: 'แก้ไขได้เฉพาะคำขอที่ยังไม่ได้อนุมัติเท่านั้น' });
 
   const isApprover = ref.getStaff().some((s) => s.code === actor && s.category === r.team_category && s.role === 'ผู้อนุมัติ');
-  const isCreatorRevivingRejected = r.status === 'rejected' && actor === r.created_by;
-  if (!isApprover && !isCreatorRevivingRejected) {
-    if (r.status === 'rejected') return res.status(403).json({ error: 'คำขอที่ถูกตีกลับ แก้ไขได้เฉพาะเจ้าของคำขอเองเท่านั้น' });
+  // ทีมเห็นแผนตีกลับของทีมตัวเองด้วยกันหมด (ดู /api/employee-lookup) เลยให้ "เพื่อนในทีมเดียวกัน" แก้แทน
+  // เจ้าของคำขอเดิมได้ด้วย ไม่ใช่บังคับต้องเป็นคนที่กดจองไว้แต่แรกเท่านั้น — แค่ต้องเป็นพนักงานทั่วไปในทีม
+  // นั้นจริง (ไม่ใช่ AREA/ผู้อนุมัติ ซึ่งมีช่องแก้ของตัวเองอยู่แล้วตอน pending/booked)
+  const actorRow = ref.getStaff().find((s) => s.code === actor && s.category === r.team_category);
+  const isTeammateRevivingRejected = r.status === 'rejected' && actorRow && actorRow.team_code === r.team_code && !['ผู้จอง', 'ผู้อนุมัติ'].includes(actorRow.role);
+  if (!isApprover && !isTeammateRevivingRejected) {
+    if (r.status === 'rejected') return res.status(403).json({ error: 'คำขอที่ถูกตีกลับ แก้ไขได้เฉพาะคนในทีมเดียวกันเท่านั้น' });
     const ownedTeams = getOwnedTeams(actor, r.team_category);
     if (!ownedTeams || !ownedTeams.has(r.team_code)) {
       return res.status(403).json({ error: 'แก้ไขคำขอนี้ได้เฉพาะผู้อนุมัติหรือ AREA ที่ดูแลทีมนี้เท่านั้น' });
