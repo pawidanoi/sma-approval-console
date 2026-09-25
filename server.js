@@ -6,6 +6,7 @@ const XLSX = require('xlsx');
 const { supabase } = require('./lib/supabase');
 const ref = require('./lib/reference-data');
 const { haversineKm, roomsNeeded } = require('./lib/geo');
+const { getRoadDistancesFrom, getRoadDistancesTo } = require('./lib/road-distance');
 const { parseScheduleCsv } = require('./lib/schedule-import');
 const { notifyEmployee } = require('./lib/line-notify');
 
@@ -225,7 +226,7 @@ app.get('/api/muster-points', (req, res) => {
   res.json({ musterPoints: rows });
 });
 
-app.get('/api/muster-check', (req, res) => {
+app.get('/api/muster-check', async (req, res) => {
   const { category, team_code, branch_code } = req.query;
   const branch = findBranch(branch_code);
   if (!branch) return res.status(404).json({ error: 'ไม่พบสาขานี้' });
@@ -235,24 +236,34 @@ app.get('/api/muster-check', (req, res) => {
   if (!points.length) {
     return res.json({ musterPoints: [], allowedAny: true, needsNoteAny: false, note: 'ไม่มีข้อมูลจุดรวมพลของทีมนี้ ข้ามการตรวจระยะทางจุดรวมพล' });
   }
+  // ใช้ระยะทางถนนจริงที่แคชไว้ล่วงหน้าก่อน (แม่นกว่าเส้นตรง) ตกไปใช้เส้นตรงเฉพาะจุดที่ยังไม่เคยคำนวณ
+  let roadMap = new Map();
+  try { roadMap = await getRoadDistancesTo('muster', points.map((p) => p.id), 'branch', branch.code); }
+  catch (err) { console.error('[muster-check] อ่านระยะทางถนนจริงไม่สำเร็จ (ใช้เส้นตรงแทน):', err.message); }
   const withDist = points.map((p) => {
-    const distanceKm = haversineKm(p.lat, p.lng, branch.lat, branch.lng);
+    const distanceKm = roadMap.get(String(p.id))?.km ?? haversineKm(p.lat, p.lng, branch.lat, branch.lng);
     const underThreshold = distanceKm == null || distanceKm <= rule.musterMinKm;
     return { ...p, distanceKm, blocked: underThreshold && rule.musterHardBlock, needsNote: underThreshold && !rule.musterHardBlock, allowed: !(underThreshold && rule.musterHardBlock) };
   });
   res.json({ musterPoints: withDist, allowedAny: withDist.some((p) => p.allowed), needsNoteAny: withDist.some((p) => p.needsNote), musterMinKm: rule.musterMinKm, musterHardBlock: rule.musterHardBlock });
 });
 
-app.get('/api/hotels-near', (req, res) => {
+app.get('/api/hotels-near', async (req, res) => {
   const branch = findBranch(String(req.query.branch || ''));
   if (!branch) return res.status(404).json({ error: 'ไม่พบสาขานี้' });
   // ทีมย่อย: แยกไป 2 สาขาพร้อมกัน แต่พักที่เดียวกัน — จัดอันดับที่พักด้วยระยะทางรวมของทั้ง 2 สาขา (น้อยสุด = ดีสุด)
   const branch2 = req.query.branch2 ? findBranch(String(req.query.branch2)) : null;
   const rule = RULES[req.query.category] || RULES.activity;
+  // ใช้ระยะทางถนนจริงที่แคชไว้ล่วงหน้าก่อน (แม่นกว่าเส้นตรง) ตกไปใช้เส้นตรงเฉพาะที่พักที่ยังไม่เคยคำนวณ
+  let roadMapA = new Map(), roadMapB = new Map();
+  try {
+    roadMapA = await getRoadDistancesFrom('branch', branch.code);
+    if (branch2) roadMapB = await getRoadDistancesFrom('branch', branch2.code);
+  } catch (err) { console.error('[hotels-near] อ่านระยะทางถนนจริงไม่สำเร็จ (ใช้เส้นตรงแทน):', err.message); }
   const withDist = ref.getHotels()
     .map((h) => {
-      const distA = haversineKm(branch.lat, branch.lng, h.lat, h.lng);
-      const distB = branch2 ? haversineKm(branch2.lat, branch2.lng, h.lat, h.lng) : null;
+      const distA = roadMapA.get(h.code)?.km ?? haversineKm(branch.lat, branch.lng, h.lat, h.lng);
+      const distB = branch2 ? (roadMapB.get(h.code)?.km ?? haversineKm(branch2.lat, branch2.lng, h.lat, h.lng)) : null;
       const distance_km = branch2 ? (distA != null && distB != null ? Math.round((distA + distB) * 10) / 10 : null) : distA;
       return { ...h, distance_km, distance_km_a: distA, distance_km_b: distB };
     })
@@ -594,12 +605,25 @@ async function validateRequestBody(b, { excludeRequestId, ownerActorCode } = {})
     }
   }
 
+  // ใช้ระยะทางถนนจริงที่แคชไว้ล่วงหน้าก่อนเสมอ (ต้องตรงกับที่ /api/muster-check และ /api/hotels-near
+  // โชว์ให้พนักงานดูตอนกรอกฟอร์ม ไม่งั้นหน้าจอบอกว่าจองได้แต่ submit จริงจะโดนบล็อกเพราะคนละสูตร)
+  // ตกไปใช้เส้นตรงเฉพาะจุดที่ยังไม่เคยคำนวณ (สาขา/ที่พักเพิ่งเพิ่มใหม่)
+  let branchRoadMap = new Map();
+  if (branch) {
+    try { branchRoadMap = await getRoadDistancesFrom('branch', branch.code); }
+    catch (err) { console.error('[validateRequestBody] อ่านระยะทางถนนจริงไม่สำเร็จ (ใช้เส้นตรงแทน):', err.message); }
+  }
+
   let muster = null;
   if (rule && b.team_code && branch) {
     const points = ref.getMusterPoints().filter((m) => m.category === b.team_category && m.team_code === b.team_code);
     if (points.length) {
       muster = points.find((p) => p.muster_name === b.muster_name) || points[0];
-      const dist = haversineKm(muster.lat, muster.lng, branch.lat, branch.lng);
+      let dist = haversineKm(muster.lat, muster.lng, branch.lat, branch.lng);
+      try {
+        const musterRoadMap = await getRoadDistancesTo('muster', [muster.id], 'branch', branch.code);
+        dist = musterRoadMap.get(String(muster.id))?.km ?? dist;
+      } catch (err) { console.error('[validateRequestBody] อ่านระยะทางจุดรวมพลไม่สำเร็จ (ใช้เส้นตรงแทน):', err.message); }
       const underThreshold = dist == null || dist <= rule.musterMinKm;
       if (underThreshold && rule.musterHardBlock) {
         errors.push(`ระยะทางจากจุดรวมพล (${muster.muster_name}) ถึงสาขานี้แค่ ${dist} กม. (ต้องเกิน ${rule.musterMinKm} กม. ถึงจะจองที่พักได้) — ไม่ต้องจองที่พักสำหรับสาขานี้`);
@@ -611,7 +635,7 @@ async function validateRequestBody(b, { excludeRequestId, ownerActorCode } = {})
 
   if (rule && branch && hotelCandidates.length) {
     const farOnes = hotelCandidates
-      .map((h) => ({ h, dist: haversineKm(branch.lat, branch.lng, h.lat, h.lng) }))
+      .map((h) => ({ h, dist: branchRoadMap.get(h.code)?.km ?? haversineKm(branch.lat, branch.lng, h.lat, h.lng) }))
       .filter((x) => x.dist != null && x.dist > rule.hotelMaxKm);
     if (farOnes.length && !String(b.far_reason || '').trim()) {
       errors.push(`ที่พักที่เลือก ${farOnes.length} อันดับห่างสาขาเกิน ${rule.hotelMaxKm} กม. (${farOnes.map((x) => `${x.h.name} ${x.dist} กม.`).join(', ')}) ต้องระบุเหตุผลกำกับ`);
