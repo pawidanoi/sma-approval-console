@@ -72,21 +72,35 @@ function parseCoords(raw) {
   return [null, null];
 }
 const ACTIVE_BRANCH_STATUSES = new Set(['Active store', 'Set up ร้าน', 'ก่อสร้างแล้ว รอเปิดร้าน', 'ยังไม่ลงเสาเข็ม']);
+// อ่านคอลัมน์ตามชื่อหัวตาราง (ไม่ใช่เลขตำแหน่ง) — ไฟล์ที่เพิ่ม/ลบคอลัมน์ (เช่นลบ "lat long") จะได้ไม่อ่านเพี้ยนทั้งไฟล์
+// พิกัดอ่านจากคอลัมน์ "lat long" ก่อน ถ้าไม่มีค่อยดึงจากลิงก์ Google Maps (?q=lat,lng)
 function parseBranchWorkbook(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer' });
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: 1 });
+  const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
+  const header = (rows[0] || []).map((h) => String(h == null ? '' : h).trim().toLowerCase());
+  const idx = (...names) => { for (const n of names) { const i = header.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
+  const iCode = idx('cjx store code'), iNameTh = idx('ชื่อสาขา'), iNameEn = idx('store name');
+  const iAmphoe = idx('อำเภอ'), iProvince = idx('จังหวัด'), iAddress = idx('ที่อยู่เต็ม');
+  const iLatLng = idx('lat long', 'lat lng', 'latlng'), iMap = idx('google maps'), iStatus = idx('status');
+  const missing = [['CJX Store Code', iCode], ['ชื่อสาขา', iNameTh], ['จังหวัด', iProvince], ['Status', iStatus]].filter(([, i]) => i < 0).map(([n]) => n);
+  if (missing.length) throw new Error('ไม่พบคอลัมน์ในแถวหัวตาราง: ' + missing.join(', '));
+  const cell = (r, i) => (i >= 0 ? normCell(r[i]) : null);
   const branches = [];
   let newSeq = 0;
-  for (const r of rows) {
-    const codeCjx = normCell(r[1]), nameTh = normCell(r[2]), nameEn = normCell(r[3]);
-    const tambon = normCell(r[4]), amphoe = normCell(r[5]), province = normCell(r[6]), address = normCell(r[7]);
-    const latlng = normCell(r[9]), status = normCell(r[18]);
+  for (const r of rows.slice(1)) {
+    const codeCjx = cell(r, iCode), nameTh = cell(r, iNameTh), nameEn = cell(r, iNameEn);
+    const amphoe = cell(r, iAmphoe), province = cell(r, iProvince), address = cell(r, iAddress);
+    const status = cell(r, iStatus);
     const name = nameTh || nameEn;
     if (!name) continue;
     let code = codeCjx && codeCjx !== '-' ? codeCjx : null;
     if (!code) { newSeq += 1; code = `NEW-${String(newSeq).padStart(3, '0')}`; }
-    const [lat, lng] = parseCoords(latlng);
+    let [lat, lng] = parseCoords(cell(r, iLatLng));
+    if (lat == null) {
+      const m = String(cell(r, iMap) || '').match(/[?&@]q?=?(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/);
+      if (m) [lat, lng] = parseCoords(`${m[1]},${m[2]}`);
+    }
     branches.push({ code, name, district: amphoe, province, address, lat, lng, status, is_active: ACTIVE_BRANCH_STATUSES.has(status || '') });
   }
   return branches;
@@ -1148,6 +1162,7 @@ app.post('/api/admin/import-branches', upload.single('file'), requireApprover, a
   let branches;
   try { branches = parseBranchWorkbook(req.file.buffer); } catch (err) { return res.status(400).json({ error: 'อ่านไฟล์ไม่สำเร็จ: ' + err.message }); }
   if (!branches.length) return res.status(400).json({ error: 'ไม่พบข้อมูลสาขาในไฟล์นี้ (ตรวจรูปแบบคอลัมน์)' });
+  if (!branches.some((b) => b.is_active)) return res.status(400).json({ error: 'ในไฟล์นี้ไม่มีสาขาที่สถานะใช้งานเลย (Active store / Set up ร้าน / ก่อสร้างแล้ว รอเปิดร้าน / ยังไม่ลงเสาเข็ม) จึงไม่นำเข้า เพื่อกันข้อมูลเดิมถูกแทนที่ด้วยข้อมูลที่ใช้งานไม่ได้ — ตรวจคอลัมน์ Status ในไฟล์' });
   const { error: delErr } = await supabase.from('approval_branches').delete().neq('code', '__none__');
   if (delErr) return res.status(500).json({ error: 'ลบข้อมูลเดิมไม่สำเร็จ: ' + delErr.message });
   for (let i = 0; i < branches.length; i += 500) {
