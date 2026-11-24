@@ -72,10 +72,17 @@ function parseCoords(raw) {
   return [null, null];
 }
 const ACTIVE_BRANCH_STATUSES = new Set(['Active store', 'Set up ร้าน', 'ก่อสร้างแล้ว รอเปิดร้าน', 'ยังไม่ลงเสาเข็ม']);
+// ไฟล์ .xlsx/.xls อ่านแบบไบนารี แต่ .csv (UTF-8) ต้องถอดรหัสเป็นข้อความก่อน ไม่งั้นภาษาไทยกลายเป็นขยะแล้วหาหัวคอลัมน์ไม่เจอ
+function readWorkbook(buffer) {
+  const isZip = buffer[0] === 0x50 && buffer[1] === 0x4b;
+  const isOle = buffer[0] === 0xd0 && buffer[1] === 0xcf;
+  if (isZip || isOle) return XLSX.read(buffer, { type: 'buffer' });
+  return XLSX.read(buffer.toString('utf8').replace(/^﻿/, ''), { type: 'string' });
+}
 // อ่านคอลัมน์ตามชื่อหัวตาราง (ไม่ใช่เลขตำแหน่ง) — ไฟล์ที่เพิ่ม/ลบคอลัมน์ (เช่นลบ "lat long") จะได้ไม่อ่านเพี้ยนทั้งไฟล์
 // พิกัดอ่านจากคอลัมน์ "lat long" ก่อน ถ้าไม่มีค่อยดึงจากลิงก์ Google Maps (?q=lat,lng)
 function parseBranchWorkbook(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const wb = readWorkbook(buffer);
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1 });
   const header = (rows[0] || []).map((h) => String(h == null ? '' : h).trim().toLowerCase());
@@ -106,7 +113,7 @@ function parseBranchWorkbook(buffer) {
   return branches;
 }
 function parseHotelWorkbook(buffer) {
-  const wb = XLSX.read(buffer, { type: 'buffer' });
+  const wb = readWorkbook(buffer);
   const ws = wb.Sheets[wb.SheetNames[0]];
   const rows = XLSX.utils.sheet_to_json(ws, { header: 1, range: 1 });
   const hotels = [];
